@@ -21,6 +21,13 @@ ctk.set_default_color_theme("blue")
 STATE = "READY"
 DEBUG = False
 
+# 이미지 캐시 (참조 유지용)
+IMAGE_CACHE = {
+    "active_frames": {},  # 활성화 상태 프레임 캐시
+    "lock_frames": None,  # 잠금 프레임 (모든 버튼이 공유)
+    "current_images": {}  # 현재 표시 중인 이미지 저장
+}
+
 # ─────────────────────────── 콜백 함수 정의 ───────────────────────────
 
 def on_help():
@@ -38,13 +45,14 @@ def on_detect():
     
     # 파일 감지 후 상태 업데이트
     if found:
-        update_center_image("READY")
-        
-        # 버튼 상태 업데이트
+        # 버튼 상태 업데이트를 위해 파일 다시 확인
         main_file = find_main_file()
         patients_file = find_file('patients')
         payment_items = find_file('payments')
-        update_button_states(main_file, patients_file, payment_items)
+        
+        # 버튼 상태 업데이트
+        root.after(100, lambda: update_button_states(main_file, patients_file, payment_items))
+        root.after(200, lambda: update_center_image("READY"))
     # 파일을 못 찾은 경우는 WORKING 상태 유지
 
 
@@ -262,37 +270,46 @@ def update_file_labels():
 
 def create_hover_button(parent, gif, cb, tip, col):
     """아이콘 GIF 애니메이션 및 호버 팝업 기능 설정"""
+    global IMAGE_CACHE
+    
     # GIF 파일 경로 저장
     gif_path = os.path.join(ICON_DIR, gif)
     lock_gif_path = os.path.join(ICON_DIR, "잠금.gif")
     
-    # 활성화 상태의 GIF 로드
-    active_frames = []
-    if os.path.exists(gif_path):
-        pil = Image.open(gif_path)
-        active_frames = [ImageTk.PhotoImage(f.convert("RGBA").resize(icon_size, Image.LANCZOS)) for f in ImageSequence.Iterator(pil)]
-    
-    # 비활성화 상태의 GIF 로드 (잠금.gif)
-    lock_frames = []
-    if os.path.exists(lock_gif_path):
+    # 잠금 프레임을 전역 캐시에 로드 (모든 버튼이 공유)
+    if IMAGE_CACHE["lock_frames"] is None and os.path.exists(lock_gif_path):
         lock_pil = Image.open(lock_gif_path)
-        lock_frames = [ImageTk.PhotoImage(f.convert("RGBA").resize(icon_size, Image.LANCZOS)) for f in ImageSequence.Iterator(lock_pil)]
+        IMAGE_CACHE["lock_frames"] = [ImageTk.PhotoImage(f.convert("RGBA").resize(icon_size, Image.LANCZOS)) 
+                                      for f in ImageSequence.Iterator(lock_pil)]
+        print(f"잠금 이미지 {len(IMAGE_CACHE['lock_frames'])}개 프레임 로드됨")
     
-    # 기본 프레임 설정
-    current_frames = active_frames if active_frames else lock_frames
+    # 활성화 상태의 GIF 로드
+    if gif not in IMAGE_CACHE["active_frames"] and os.path.exists(gif_path):
+        pil = Image.open(gif_path)
+        IMAGE_CACHE["active_frames"][gif] = [ImageTk.PhotoImage(f.convert("RGBA").resize(icon_size, Image.LANCZOS)) 
+                                            for f in ImageSequence.Iterator(pil)]
+        print(f"{gif} 이미지 {len(IMAGE_CACHE['active_frames'][gif])}개 프레임 로드됨")
     
+    # 버튼 컨테이너 생성
     cont = ctk.CTkFrame(master=parent, fg_color="white", corner_radius=16,
                         width=icon_size[0]+8, height=icon_size[1]+8,
                         border_width=1, border_color=BG)
-    cont.grid(row=0, column=col, padx=2, pady=4)  # padx를 4에서 2로 감소
+    cont.grid(row=0, column=col, padx=2, pady=4)
     cont.pack_propagate(False)
     
-    lbl = tk.Label(cont, image=current_frames[0] if current_frames else None, bg="white")
-    lbl.active_frames = active_frames
-    lbl.lock_frames = lock_frames
-    lbl.frames = current_frames
-    lbl.active_gif_path = gif_path  # 원본 GIF 경로 저장
-    lbl.lock_gif_path = lock_gif_path  # 잠금 GIF 경로 저장
+    # 기본 프레임 설정
+    active_frames = IMAGE_CACHE["active_frames"].get(gif, [])
+    lock_frames = IMAGE_CACHE["lock_frames"] or []
+    current_frames = active_frames if active_frames else lock_frames
+    
+    # 현재 이미지 참조 캐싱
+    if current_frames:
+        IMAGE_CACHE["current_images"][f"btn_{col}"] = current_frames[0]
+        
+    # 레이블(버튼) 생성
+    lbl = tk.Label(cont, image=IMAGE_CACHE["current_images"].get(f"btn_{col}"), bg="white")
+    lbl.btn_id = f"btn_{col}"  # 버튼 식별자
+    lbl.gif_name = gif  # 원래 GIF 이름 저장
     lbl.pack(expand=True)
     popup=None
     
@@ -319,51 +336,56 @@ def create_hover_button(parent, gif, cb, tip, col):
         if popup: popup.destroy(); popup=None
     
     def start_anim():
-        # 비활성화 상태에서도 애니메이션 시작 가능
+        # 현재 사용중인 프레임 결정
+        frames = IMAGE_CACHE["active_frames"].get(lbl.gif_name, []) if not lbl.is_disabled else IMAGE_CACHE["lock_frames"]
+        if not frames:
+            return
+            
         def anim(i=0): 
-            # 현재 프레임을 사용하여 애니메이션 진행
-            if lbl.frames and len(lbl.frames) > 0:
-                lbl.config(image=lbl.frames[i])
-                lbl.after_id = lbl.after(SPEED, anim, (i+1)%len(lbl.frames))
+            if hasattr(lbl, 'is_destroyed') and lbl.is_destroyed:
+                return
+                
+            # 애니메이션 중 비활성화 상태가 변경되었는지 확인
+            current_frames = IMAGE_CACHE["active_frames"].get(lbl.gif_name, []) if not lbl.is_disabled else IMAGE_CACHE["lock_frames"]
+            if current_frames != frames:
+                # 프레임이 변경되었으면 애니메이션 중지하고 다시 시작
+                stop_anim()
+                start_anim()
+                return
+                
+            # 현재 프레임으로 이미지 업데이트
+            if frames and len(frames) > 0:
+                lbl.config(image=frames[i])
+                IMAGE_CACHE["current_images"][lbl.btn_id] = frames[i]  # 현재 이미지 캐싱
+                lbl.after_id = lbl.after(SPEED, anim, (i+1)%len(frames))
         anim()
     
     def stop_anim():
-        if hasattr(lbl,'after_id'): lbl.after_cancel(lbl.after_id)
-        if lbl.frames and len(lbl.frames) > 0:
-            lbl.config(image=lbl.frames[0])
+        if hasattr(lbl,'after_id'): 
+            lbl.after_cancel(lbl.after_id)
+            
+        # 프레임 선택
+        frames = IMAGE_CACHE["active_frames"].get(lbl.gif_name, []) if not lbl.is_disabled else IMAGE_CACHE["lock_frames"]
+        if frames and len(frames) > 0:
+            lbl.config(image=frames[0])
+            IMAGE_CACHE["current_images"][lbl.btn_id] = frames[0]  # 현재 이미지 캐싱
     
     def on_click(e):
         if lbl.is_disabled: return  # 비활성화 상태면 클릭 무시
         cb()
-    
-    # 활성화 상태의 GIF를 다시 로드하는 함수
-    def reload_active_frames():
-        if os.path.exists(lbl.active_gif_path):
-            pil = Image.open(lbl.active_gif_path)
-            lbl.active_frames = [ImageTk.PhotoImage(f.convert("RGBA").resize(icon_size, Image.LANCZOS)) for f in ImageSequence.Iterator(pil)]
-            return lbl.active_frames
-        return []
-    
-    # 잠금 GIF를 다시 로드하는 함수
-    def reload_lock_frames():
-        if os.path.exists(lbl.lock_gif_path):
-            lock_pil = Image.open(lbl.lock_gif_path)
-            lbl.lock_frames = [ImageTk.PhotoImage(f.convert("RGBA").resize(icon_size, Image.LANCZOS)) for f in ImageSequence.Iterator(lock_pil)]
-            return lbl.lock_frames
-        return []
     
     # 버튼 활성화/비활성화 메서드 추가
     def enable():
         lbl.is_disabled = False
         lbl.configure(bg="white")  # 일반 배경색
         
-        # 활성화 상태의 GIF 사용 - 무조건 active_frames 사용하고 필요시 다시 로드
-        if not lbl.active_frames or len(lbl.active_frames) == 0:
-            lbl.active_frames = reload_active_frames()
+        # 활성화 상태의 프레임 가져오기
+        active_frames = IMAGE_CACHE["active_frames"].get(lbl.gif_name, [])
+        if active_frames and len(active_frames) > 0:
+            lbl.config(image=active_frames[0])
+            IMAGE_CACHE["current_images"][lbl.btn_id] = active_frames[0]  # 현재 이미지 캐싱
+            print(f"버튼 {col} ({lbl.gif_name}) 활성화됨")
         
-        lbl.frames = lbl.active_frames
-        if lbl.frames and len(lbl.frames) > 0:
-            lbl.config(image=lbl.frames[0])
         lbl.bind("<Enter>", lambda e:(start_anim(),show_pop()))
         lbl.bind("<Leave>", lambda e:(stop_anim(),hide_pop()))
         lbl.bind("<Button-1>", on_click)
@@ -372,19 +394,26 @@ def create_hover_button(parent, gif, cb, tip, col):
         lbl.is_disabled = True
         lbl.configure(bg="white")  # 활성화 상태와 같은 배경색 유지
         
-        # 비활성화 상태의 GIF 사용(잠금) - 필요시 다시 로드
-        if not lbl.lock_frames or len(lbl.lock_frames) == 0:
-            lbl.lock_frames = reload_lock_frames()
-            
-        lbl.frames = lbl.lock_frames
-        if lbl.frames and len(lbl.frames) > 0:
-            lbl.config(image=lbl.frames[0])
+        # 잠금 프레임 사용
+        if IMAGE_CACHE["lock_frames"] and len(IMAGE_CACHE["lock_frames"]) > 0:
+            lbl.config(image=IMAGE_CACHE["lock_frames"][0])
+            IMAGE_CACHE["current_images"][lbl.btn_id] = IMAGE_CACHE["lock_frames"][0]  # 현재 이미지 캐싱
+            print(f"버튼 {col} ({lbl.gif_name}) 비활성화됨")
+        
         # 비활성화 상태에서도 호버시 애니메이션은 지원
         lbl.bind("<Enter>", lambda e: start_anim())
         lbl.bind("<Leave>", lambda e: stop_anim())
         # 클릭은 비활성화
         lbl.unbind("<Button-1>")
         hide_pop()
+    
+    # 소멸자 대응
+    def on_destroy():
+        lbl.is_destroyed = True
+        if hasattr(lbl, 'after_id'): 
+            lbl.after_cancel(lbl.after_id)
+    
+    lbl.bind("<Destroy>", lambda e: on_destroy())
     
     # 기본적으로 활성화 상태로 시작 (파일 감지, 종료 버튼)
     # 다른 버튼은 init_app에서 비활성화 설정
@@ -396,6 +425,11 @@ def create_hover_button(parent, gif, cb, tip, col):
 
 def update_button_states(main_file, patients_file, payment_items):
     """파일 존재 여부에 따라 버튼 상태 업데이트"""
+    print("\n===== 버튼 상태 업데이트 =====")
+    print(f"메인 파일: {main_file}")
+    print(f"환자 파일: {patients_file}")
+    print(f"결제 파일: {payment_items}")
+    
     # 버튼을 이름으로 찾기
     button_frames = group.winfo_children()
     if len(button_frames) < 5:
@@ -419,6 +453,8 @@ def update_button_states(main_file, patients_file, payment_items):
     
     # 메인 파일이 있으면 환자 정보 업데이트 버튼과 도표 업데이트 버튼 활성화
     if main_file:
+        print("메인 파일 존재: 환자 정보 업데이트 버튼과 도표 업데이트 버튼 활성화")
+        
         if patient_update_label and hasattr(patient_update_label, 'enable'):
             patient_update_label.enable()
         
@@ -427,13 +463,16 @@ def update_button_states(main_file, patients_file, payment_items):
         
         # 메인 파일과 Patients 또는 Payments 파일 중 하나라도 있으면 표 업데이트 버튼 활성화
         if patients_file or payment_items:
+            print("Patients 또는 Payments 파일 존재: 표 업데이트 버튼 활성화")
             if table_update_label and hasattr(table_update_label, 'enable'):
                 table_update_label.enable()
         else:
+            print("Patients와 Payments 파일 모두 없음: 표 업데이트 버튼 비활성화")
             # 필요한 다른 파일이 없으면 표 업데이트 버튼 비활성화
             if table_update_label and hasattr(table_update_label, 'disable'):
                 table_update_label.disable()
     else:
+        print("메인 파일 없음: 세 버튼 모두 비활성화")
         # 메인 파일이 없으면 세 버튼 모두 비활성화
         if patient_update_label and hasattr(patient_update_label, 'disable'):
             patient_update_label.disable()
@@ -441,6 +480,7 @@ def update_button_states(main_file, patients_file, payment_items):
             table_update_label.disable()
         if chart_update_label and hasattr(chart_update_label, 'disable'):
             chart_update_label.disable()
+    print("===== 버튼 상태 업데이트 완료 =====\n")
 
 # ─────────────────────────── 메인 윈도우 설정 ───────────────────────────
 BG = "#fff0e5"
