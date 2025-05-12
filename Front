@@ -537,10 +537,6 @@ status_frame.pack(side="bottom", fill="x", padx=16, pady=(0,0))
 status_lbl = ctk.CTkLabel(master=status_frame, text="(상태표시)", font=("맑은 고딕",11), text_color="#777777")
 status_lbl.pack(side="left", padx=(12,0))
 
-# 7) 파일 업로드 카드
-card = ctk.CTkFrame(master=root, fg_color="white", corner_radius=16, border_width=1, border_color="#e0e0e0")
-card.pack(side="bottom", fill="x", padx=16, pady=(0,2))
-
 # 메인 파일 업로드 취소 함수
 def cancel_main_file():
     UPLOADED_FILES["main"] = None
@@ -558,6 +554,103 @@ def cancel_Paymentitems_file():
     UPLOADED_FILES["Paymentitems"] = None
     update_file_labels()
     messagebox.showinfo("업로드 취소", "결제 파일 업로드가 취소되었습니다.")
+
+# 7) 파일 업로드 카드
+card = ctk.CTkFrame(master=root, fg_color="white", corner_radius=16, border_width=1, border_color="#e0e0e0")
+card.pack(side="bottom", fill="x", padx=16, pady=(0,2))
+
+# 메인 파일 업로드 행
+main_row = ctk.CTkFrame(master=card, fg_color="transparent")
+main_row.pack(fill="x", padx=12, pady=(5,2))
+ctk.CTkLabel(master=main_row, text="메인파일:", font=("맑은 고딕",12), text_color="#333333").pack(side="left")
+ctk.CTkButton(
+    master=main_row, 
+    text="업로드", 
+    font=("맑은 고딕", 10),
+    fg_color="#4CAF50", 
+    hover_color="#388E3C",
+    text_color="white", 
+    corner_radius=8,
+    width=60, 
+    height=25,
+    command=on_upload_main_file
+).pack(side="right")
+ctk.CTkButton(
+    master=main_row,
+    text="취소",
+    font=("맑은 고딕", 10),
+    fg_color="#BDBDBD",
+    hover_color="#757575",
+    text_color="white",
+    corner_radius=8,
+    width=50,
+    height=25,
+    command=cancel_main_file
+).pack(side="right", padx=(0,4))
+main_file_label = ctk.CTkLabel(master=main_row, text="없음", font=("맑은 고딕",12), text_color="#555555")
+main_file_label.pack(side="left", padx=(6,0))
+
+# 환자 파일 업로드 행
+patient_row = ctk.CTkFrame(master=card, fg_color="transparent")
+patient_row.pack(fill="x", padx=12, pady=2)
+ctk.CTkLabel(master=patient_row, text="환자파일:", font=("맑은 고딕",12), text_color="#333333").pack(side="left")
+ctk.CTkButton(
+    master=patient_row, 
+    text="업로드", 
+    font=("맑은 고딕", 10),
+    fg_color="#2196F3", 
+    hover_color="#1976D2",
+    text_color="white", 
+    corner_radius=8,
+    width=60, 
+    height=25,
+    command=on_upload_patients_file
+).pack(side="right")
+ctk.CTkButton(
+    master=patient_row,
+    text="취소",
+    font=("맑은 고딕", 10),
+    fg_color="#BDBDBD",
+    hover_color="#757575",
+    text_color="white",
+    corner_radius=8,
+    width=50,
+    height=25,
+    command=cancel_patients_file
+).pack(side="right", padx=(0,4))
+patient_file_label = ctk.CTkLabel(master=patient_row, text="없음 (patients*)", font=("맑은 고딕",12), text_color="#555555")
+patient_file_label.pack(side="left", padx=(6,0))
+
+# 결제 파일 업로드 행
+payment_row = ctk.CTkFrame(master=card, fg_color="transparent")
+payment_row.pack(fill="x", padx=12, pady=(2,5))
+ctk.CTkLabel(master=payment_row, text="결제파일:", font=("맑은 고딕",12), text_color="#333333").pack(side="left")
+ctk.CTkButton(
+    master=payment_row, 
+    text="업로드", 
+    font=("맑은 고딕", 10),
+    fg_color="#FF9800", 
+    hover_color="#F57C00",
+    text_color="white", 
+    corner_radius=8,
+    width=60, 
+    height=25,
+    command=on_upload_Paymentitems_file
+).pack(side="right")
+ctk.CTkButton(
+    master=payment_row,
+    text="취소",
+    font=("맑은 고딕", 10),
+    fg_color="#BDBDBD",
+    hover_color="#757575",
+    text_color="white",
+    corner_radius=8,
+    width=50,
+    height=25,
+    command=cancel_Paymentitems_file
+).pack(side="right", padx=(0,4))
+payment_file_label = ctk.CTkLabel(master=payment_row, text="없음 (Paymentitems*)", font=("맑은 고딕",12), text_color="#555555")
+payment_file_label.pack(side="left", padx=(6,0))
 
 # 8) 시작시 앱 초기화
 def init_app():
