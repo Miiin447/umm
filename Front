@@ -8,6 +8,7 @@ from tkinter import messagebox, filedialog
 from PIL import Image, ImageTk, ImageSequence
 import customtkinter as ctk
 import shutil
+import sys
 from datetime import datetime
 
 # ─────────────────────────── 테마 설정 ───────────────────────────
@@ -43,7 +44,8 @@ def on_upload_main_file():
     """메인 파일 업로드"""
     file_path = filedialog.askopenfilename(
         title="메인 파일 선택",
-        filetypes=(("Excel 파일", "*.xlsx"), ("CSV 파일", "*.csv"), ("모든 파일", "*.*"))
+        filetypes=(("Excel 파일", "*.xlsx"), ("CSV 파일", "*.csv"), ("모든 파일", "*.*")),
+        defaultextension=".xlsx"
     )
     if file_path:
         UPLOADED_FILES["main"] = file_path
@@ -61,14 +63,13 @@ def on_upload_main_file():
             print(f"메인 파일 백업 생성 완료: {backup_file}")
         except Exception as e:
             print(f"백업 생성 중 오류 발생: {str(e)}")
-            
-        messagebox.showinfo("파일 업로드", f"메인 파일 업로드 완료: {main_file_name}")
 
 def on_upload_patients_file():
     """환자 파일 업로드"""
     file_path = filedialog.askopenfilename(
         title="환자 파일 선택",
-        filetypes=(("Excel 파일", "*.xlsx"), ("CSV 파일", "*.csv"), ("모든 파일", "*.*"))
+        filetypes=(("CSV 파일", "*.csv"), ("Excel 파일", "*.xlsx"), ("모든 파일", "*.*")),
+        defaultextension=".csv"
     )
     if file_path:
         # 파일 이름이 'patients'로 시작하는지 확인
@@ -79,24 +80,23 @@ def on_upload_patients_file():
             
         UPLOADED_FILES["patients"] = file_path
         update_file_labels()
-        messagebox.showinfo("파일 업로드", f"환자 파일 업로드 완료: {os.path.basename(file_path)}")
 
 def on_upload_Paymentitems_file():
     """결제 파일 업로드"""
     file_path = filedialog.askopenfilename(
         title="결제 파일 선택",
-        filetypes=(("Excel 파일", "*.xlsx"), ("CSV 파일", "*.csv"), ("모든 파일", "*.*"))
+        filetypes=(("CSV 파일", "*.csv"), ("Excel 파일", "*.xlsx"), ("모든 파일", "*.*")),
+        defaultextension=".csv"
     )
     if file_path:
-        # 파일 이름이 'Paymentitems'로 시작하는지 확인
+        # 대소문자 구분 없이 'paymentitems' 또는 'paymentItems'로 시작하는지 확인
         file_name = os.path.basename(file_path).lower()
-        if not file_name.startswith('Paymentitems'):
-            messagebox.showwarning("파일 형식 오류", "결제 파일은 'Paymentitems'로 시작해야 합니다.")
+        if not file_name.startswith('paymentitems'):
+            messagebox.showwarning("파일 형식 오류", "결제 파일은 'PaymentItems' 또는 'Paymentitems'로 시작해야 합니다.")
             return
             
         UPLOADED_FILES["Paymentitems"] = file_path
         update_file_labels()
-        messagebox.showinfo("파일 업로드", f"결제 파일 업로드 완료: {os.path.basename(file_path)}")
 
 def on_table_update():
     """표 업데이트 기능 실행"""
@@ -139,7 +139,22 @@ def on_patient_update():
 def on_exit():
     """프로그램 종료"""
     print("🚪 종료")
+    
+    # 애니메이션 중지 플래그를 모든 버튼에 설정
+    for frame in group.winfo_children():
+        for widget in frame.winfo_children():
+            if hasattr(widget, 'animation_running'):
+                widget.animation_running = False
+                widget.is_destroyed = True
+            if hasattr(widget, 'after_id'):
+                try:
+                    widget.after_cancel(widget.after_id)
+                except:
+                    pass
+    
+    # 프로그램 완전 종료
     root.destroy()
+    sys.exit(0)  # 프로세스 강제 종료
 
 def on_chart_update():
     """도표 업데이트 기능 실행"""
@@ -404,7 +419,7 @@ def create_hover_button(parent, gif, cb, tip, col):
     
     lbl.bind("<Destroy>", lambda e: on_destroy())
     
-    # 기본적으로 활성화 상태로 시작 (파일 감지, 종료 버튼)
+    # 기본적으로 활성화 상태로 시작 (종료 버튼)
     # 다른 버튼은 init_app에서 비활성화 설정
     lbl.enable = enable
     lbl.disable = disable
@@ -479,6 +494,7 @@ root.title("케이닥 마크7 4.0")
 root.configure(fg_color=BG)
 
 # 1) 상단 타이틀
+
 ctk.CTkLabel(
     master=root,
     text="🌟 케이닥 마크7 4.0 🌟",
@@ -541,19 +557,16 @@ status_lbl.pack(side="left", padx=(12,0))
 def cancel_main_file():
     UPLOADED_FILES["main"] = None
     update_file_labels()
-    messagebox.showinfo("업로드 취소", "메인 파일 업로드가 취소되었습니다.")
 
 # 환자 파일 업로드 취소 함수
 def cancel_patients_file():
     UPLOADED_FILES["patients"] = None
     update_file_labels()
-    messagebox.showinfo("업로드 취소", "환자 파일 업로드가 취소되었습니다.")
 
 # 결제 파일 업로드 취소 함수
 def cancel_Paymentitems_file():
     UPLOADED_FILES["Paymentitems"] = None
     update_file_labels()
-    messagebox.showinfo("업로드 취소", "결제 파일 업로드가 취소되었습니다.")
 
 # 7) 파일 업로드 카드
 card = ctk.CTkFrame(master=root, fg_color="white", corner_radius=16, border_width=1, border_color="#e0e0e0")
