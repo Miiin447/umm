@@ -27,6 +27,19 @@ UPLOADED_FILES = {
     "Paymentitems": None
 }
 
+# UI 요소 참조
+UI_ELEMENTS = {
+    "main_file_label": None,
+    "patient_file_label": None,
+    "payment_file_label": None,
+    "main_cancel_btn": None,
+    "patient_cancel_btn": None,
+    "payment_cancel_btn": None,
+    "main_upload_btn": None,
+    "patient_upload_btn": None,
+    "payment_upload_btn": None
+}
+
 # 이미지 캐시 (참조 유지용)
 IMAGE_CACHE = {
     "active_frames": {},  # 활성화 상태 프레임 캐시
@@ -116,8 +129,21 @@ def on_table_update():
     if not check_file_access(UPLOADED_FILES["main"]):
         messagebox.showerror("오류", f"메인 파일이 열려있거나 접근할 수 없습니다.\n파일을 닫고 다시 시도해주세요: {UPLOADED_FILES['main']}")
         return
+    
+    # 작업 시작 시 상태를 "WORKING"으로 변경
+    update_center_image("WORKING")
+    root.update()  # UI 즉시 업데이트
+    
+    try:
+        # 여기에 실제 표 업데이트 기능 구현
+        # 작업 수행...
         
-    # 여기에 실제 표 업데이트 기능 구현
+        # 작업 완료 후 원래 상태로 복원
+        update_center_image("READY" if UPLOADED_FILES["main"] else "READY_NO_MAIN")
+    except Exception as e:
+        messagebox.showerror("오류", f"표 업데이트 중 오류가 발생했습니다: {str(e)}")
+        # 오류 발생 시에도 원래 상태로 복원
+        update_center_image("READY" if UPLOADED_FILES["main"] else "READY_NO_MAIN")
 
 
 def on_patient_update():
@@ -133,7 +159,21 @@ def on_patient_update():
     if not check_file_access(UPLOADED_FILES["main"]):
         messagebox.showerror("오류", f"메인 파일이 열려있거나 접근할 수 없습니다.\n파일을 닫고 다시 시도해주세요: {UPLOADED_FILES['main']}")
         return
+    
+    # 작업 시작 시 상태를 "WORKING"으로 변경
+    update_center_image("WORKING")
+    root.update()  # UI 즉시 업데이트
+    
+    try:
+        # 여기에 실제 환자 정보 업데이트 기능 구현
+        # 작업 수행...
         
+        # 작업 완료 후 원래 상태로 복원
+        update_center_image("READY" if UPLOADED_FILES["main"] else "READY_NO_MAIN")
+    except Exception as e:
+        messagebox.showerror("오류", f"환자 정보 업데이트 중 오류가 발생했습니다: {str(e)}")
+        # 오류 발생 시에도 원래 상태로 복원
+        update_center_image("READY" if UPLOADED_FILES["main"] else "READY_NO_MAIN")
 
 
 def on_exit():
@@ -169,20 +209,38 @@ def on_chart_update():
     if not check_file_access(UPLOADED_FILES["main"]):
         messagebox.showerror("오류", f"메인 파일이 열려있거나 접근할 수 없습니다.\n파일을 닫고 다시 시도해주세요: {UPLOADED_FILES['main']}")
         return
+    
+    # 작업 시작 시 상태를 "WORKING"으로 변경
+    update_center_image("WORKING")
+    root.update()  # UI 즉시 업데이트
+    
+    try:
+        # 여기에 실제 도표 업데이트 기능 구현
+        # 작업 수행...
         
-    # 여기에 실제 도표 업데이트 기능 구현
+        # 작업 완료 후 원래 상태로 복원
+        update_center_image("READY" if UPLOADED_FILES["main"] else "READY_NO_MAIN")
+    except Exception as e:
+        messagebox.showerror("오류", f"도표 업데이트 중 오류가 발생했습니다: {str(e)}")
+        # 오류 발생 시에도 원래 상태로 복원
+        update_center_image("READY" if UPLOADED_FILES["main"] else "READY_NO_MAIN")
 
 # ─────────────────── 중앙 이미지 업데이트 함수 ───────────────────
 
 def update_center_image(new_state):
     """
     new_state 에 따라 중앙에 표시되는 이미지를 변경합니다.
-    1) READY: 처리자 배경제거.png
-    2) WORKING: 처리중 배경제거.png
+    1) READY: 처리자 배경제거.png (메인 파일 있을 때)
+    2) READY_NO_MAIN: 감시자 배경제거.png (메인 파일 없을 때)
+    3) WORKING: 처리중 배경제거.png
     """
     global STATE, center_lbl, center_img
     STATE = new_state
-    img_map = {"READY": "처리자 배경제거.png", "WORKING": "처리중 배경제거.png"}
+    img_map = {
+        "READY": "처리자 배경제거.png", 
+        "READY_NO_MAIN": "감시자 배경제거.png",
+        "WORKING": "처리중 배경제거.png"
+    }
     img_file = os.path.join(ASSET_DIR, img_map[STATE])
     if os.path.exists(img_file):
         pil_img = Image.open(img_file)
@@ -236,24 +294,43 @@ def update_file_labels():
     if file_summary:
         print(f"파일 업로드 결과: {', '.join(file_summary)}")
     
-    # 카드 레이블 업데이트
-    file_rows = card.winfo_children()
-    if len(file_rows) >= 3:
-        # 메인 파일 레이블 업데이트
-        main_row_labels = file_rows[0].winfo_children()
-        if len(main_row_labels) >= 3:
-            main_row_labels[2].configure(text=main_file if main_file else "없음")
-        
-        # 환자 파일 레이블 업데이트
-        patient_row_labels = file_rows[1].winfo_children()
-        if len(patient_row_labels) >= 3:
-            patient_row_labels[2].configure(text=patients_file if patients_file else "없음")
-        
-        # 지불 파일 레이블 업데이트
-        payment_row_labels = file_rows[2].winfo_children()
-        if len(payment_row_labels) >= 3:
-            payment_row_labels[2].configure(text=payment_items if payment_items else "없음")
+    # 메인 파일 UI 업데이트
+    if main_file:
+        # 파일이 업로드된 경우: 파일명 표시, 취소 버튼 표시
+        UI_ELEMENTS["main_file_label"].configure(text=main_file)
+        UI_ELEMENTS["main_cancel_btn"].pack(side="right", padx=(0,4))
+        UI_ELEMENTS["main_file_label"].pack(side="right", padx=(0,4))
+        # 메인 파일이 있을 때 "처리자 배경제거.png" 표시
+        update_center_image("READY")
+    else:
+        # 파일이 없는 경우: 파일명 및 취소 버튼 숨김
+        UI_ELEMENTS["main_file_label"].pack_forget()
+        UI_ELEMENTS["main_cancel_btn"].pack_forget()
+        # 메인 파일이 없을 때 "감시자 배경제거.png" 표시
+        update_center_image("READY_NO_MAIN")
     
+    # 환자 파일 UI 업데이트
+    if patients_file:
+        # 파일이 업로드된 경우: 파일명 표시, 취소 버튼 표시
+        UI_ELEMENTS["patient_file_label"].configure(text=patients_file)
+        UI_ELEMENTS["patient_cancel_btn"].pack(side="right", padx=(0,4))
+        UI_ELEMENTS["patient_file_label"].pack(side="right", padx=(0,4))
+    else:
+        # 파일이 없는 경우: 파일명 및 취소 버튼 숨김
+        UI_ELEMENTS["patient_file_label"].pack_forget()
+        UI_ELEMENTS["patient_cancel_btn"].pack_forget()
+    
+    # 결제 파일 UI 업데이트
+    if payment_items:
+        # 파일이 업로드된 경우: 파일명 표시, 취소 버튼 표시
+        UI_ELEMENTS["payment_file_label"].configure(text=payment_items)
+        UI_ELEMENTS["payment_cancel_btn"].pack(side="right", padx=(0,4))
+        UI_ELEMENTS["payment_file_label"].pack(side="right", padx=(0,4))
+    else:
+        # 파일이 없는 경우: 파일명 및 취소 버튼 숨김
+        UI_ELEMENTS["payment_file_label"].pack_forget()
+        UI_ELEMENTS["payment_cancel_btn"].pack_forget()
+        
     # 상태 레이블 업데이트
     if not main_file:
         status_lbl.configure(text="⚠️ 메인 파일 없음", text_color="red")
@@ -576,19 +653,9 @@ card.pack(side="bottom", fill="x", padx=16, pady=(0,2))
 main_row = ctk.CTkFrame(master=card, fg_color="transparent")
 main_row.pack(fill="x", padx=12, pady=(5,2))
 ctk.CTkLabel(master=main_row, text="메인파일:", font=("맑은 고딕",12), text_color="#333333").pack(side="left")
-ctk.CTkButton(
-    master=main_row, 
-    text="업로드", 
-    font=("맑은 고딕", 10),
-    fg_color="#4CAF50", 
-    hover_color="#388E3C",
-    text_color="white", 
-    corner_radius=8,
-    width=60, 
-    height=25,
-    command=on_upload_main_file
-).pack(side="right")
-ctk.CTkButton(
+
+# 취소 버튼 (처음에는 보이지 않음)
+main_cancel_btn = ctk.CTkButton(
     master=main_row,
     text="취소",
     font=("맑은 고딕", 10),
@@ -599,27 +666,40 @@ ctk.CTkButton(
     width=50,
     height=25,
     command=cancel_main_file
-).pack(side="right", padx=(0,4))
-main_file_label = ctk.CTkLabel(master=main_row, text="없음", font=("맑은 고딕",12), text_color="#555555")
-main_file_label.pack(side="left", padx=(6,0))
+)
+main_cancel_btn.pack(side="right", padx=(0,4))
+main_cancel_btn.pack_forget()  # 처음에는 숨김
+UI_ELEMENTS["main_cancel_btn"] = main_cancel_btn
+
+# 파일 이름 레이블 (처음에는 보이지 않음)
+main_file_label = ctk.CTkLabel(master=main_row, text="", font=("맑은 고딕",12), text_color="#007BFF")
+main_file_label.pack(side="right", padx=(0,4))
+main_file_label.pack_forget()  # 처음에는 숨김
+UI_ELEMENTS["main_file_label"] = main_file_label
+
+# 메인 파일 업로드 버튼
+main_upload_btn = ctk.CTkButton(
+    master=main_row, 
+    text="업로드", 
+    font=("맑은 고딕", 10),
+    fg_color="#4CAF50", 
+    hover_color="#388E3C",
+    text_color="white", 
+    corner_radius=8,
+    width=60, 
+    height=25,
+    command=on_upload_main_file
+)
+main_upload_btn.pack(side="right")
+UI_ELEMENTS["main_upload_btn"] = main_upload_btn
 
 # 환자 파일 업로드 행
 patient_row = ctk.CTkFrame(master=card, fg_color="transparent")
 patient_row.pack(fill="x", padx=12, pady=2)
 ctk.CTkLabel(master=patient_row, text="환자파일:", font=("맑은 고딕",12), text_color="#333333").pack(side="left")
-ctk.CTkButton(
-    master=patient_row, 
-    text="업로드", 
-    font=("맑은 고딕", 10),
-    fg_color="#2196F3", 
-    hover_color="#1976D2",
-    text_color="white", 
-    corner_radius=8,
-    width=60, 
-    height=25,
-    command=on_upload_patients_file
-).pack(side="right")
-ctk.CTkButton(
+
+# 취소 버튼 (처음에는 보이지 않음)
+patient_cancel_btn = ctk.CTkButton(
     master=patient_row,
     text="취소",
     font=("맑은 고딕", 10),
@@ -630,27 +710,40 @@ ctk.CTkButton(
     width=50,
     height=25,
     command=cancel_patients_file
-).pack(side="right", padx=(0,4))
-patient_file_label = ctk.CTkLabel(master=patient_row, text="없음 (patients*)", font=("맑은 고딕",12), text_color="#555555")
-patient_file_label.pack(side="left", padx=(6,0))
+)
+patient_cancel_btn.pack(side="right", padx=(0,4))
+patient_cancel_btn.pack_forget()  # 처음에는 숨김
+UI_ELEMENTS["patient_cancel_btn"] = patient_cancel_btn
+
+# 파일 이름 레이블 (처음에는 보이지 않음)
+patient_file_label = ctk.CTkLabel(master=patient_row, text="", font=("맑은 고딕",12), text_color="#007BFF")
+patient_file_label.pack(side="right", padx=(0,4))
+patient_file_label.pack_forget()  # 처음에는 숨김
+UI_ELEMENTS["patient_file_label"] = patient_file_label
+
+# 환자 파일 업로드 버튼
+patient_upload_btn = ctk.CTkButton(
+    master=patient_row, 
+    text="업로드", 
+    font=("맑은 고딕", 10),
+    fg_color="#2196F3", 
+    hover_color="#1976D2",
+    text_color="white", 
+    corner_radius=8,
+    width=60, 
+    height=25,
+    command=on_upload_patients_file
+)
+patient_upload_btn.pack(side="right")
+UI_ELEMENTS["patient_upload_btn"] = patient_upload_btn
 
 # 결제 파일 업로드 행
 payment_row = ctk.CTkFrame(master=card, fg_color="transparent")
 payment_row.pack(fill="x", padx=12, pady=(2,5))
 ctk.CTkLabel(master=payment_row, text="결제파일:", font=("맑은 고딕",12), text_color="#333333").pack(side="left")
-ctk.CTkButton(
-    master=payment_row, 
-    text="업로드", 
-    font=("맑은 고딕", 10),
-    fg_color="#FF9800", 
-    hover_color="#F57C00",
-    text_color="white", 
-    corner_radius=8,
-    width=60, 
-    height=25,
-    command=on_upload_Paymentitems_file
-).pack(side="right")
-ctk.CTkButton(
+
+# 취소 버튼 (처음에는 보이지 않음)
+payment_cancel_btn = ctk.CTkButton(
     master=payment_row,
     text="취소",
     font=("맑은 고딕", 10),
@@ -661,9 +754,32 @@ ctk.CTkButton(
     width=50,
     height=25,
     command=cancel_Paymentitems_file
-).pack(side="right", padx=(0,4))
-payment_file_label = ctk.CTkLabel(master=payment_row, text="없음 (Paymentitems*)", font=("맑은 고딕",12), text_color="#555555")
-payment_file_label.pack(side="left", padx=(6,0))
+)
+payment_cancel_btn.pack(side="right", padx=(0,4))
+payment_cancel_btn.pack_forget()  # 처음에는 숨김
+UI_ELEMENTS["payment_cancel_btn"] = payment_cancel_btn
+
+# 파일 이름 레이블 (처음에는 보이지 않음)
+payment_file_label = ctk.CTkLabel(master=payment_row, text="", font=("맑은 고딕",12), text_color="#007BFF")
+payment_file_label.pack(side="right", padx=(0,4))
+payment_file_label.pack_forget()  # 처음에는 숨김
+UI_ELEMENTS["payment_file_label"] = payment_file_label
+
+# 결제 파일 업로드 버튼
+payment_upload_btn = ctk.CTkButton(
+    master=payment_row, 
+    text="업로드", 
+    font=("맑은 고딕", 10),
+    fg_color="#FF9800", 
+    hover_color="#F57C00",
+    text_color="white", 
+    corner_radius=8,
+    width=60, 
+    height=25,
+    command=on_upload_Paymentitems_file
+)
+payment_upload_btn.pack(side="right")
+UI_ELEMENTS["payment_upload_btn"] = payment_upload_btn
 
 # 8) 시작시 앱 초기화
 def init_app():
@@ -684,6 +800,9 @@ def init_app():
                 if isinstance(widget, tk.Label):
                     if idx in [0, 1, 2] and hasattr(widget, 'disable'):  # 표 업데이트, 환자 정보, 도표 업데이트 버튼
                         widget.disable()
+    
+    # 초기 이미지는 메인 파일이 없는 상태인 "감시자 배경제거.png"로 설정
+    update_center_image("READY_NO_MAIN")
     
     print("앱 초기화 완료")
 
