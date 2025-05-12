@@ -4,7 +4,7 @@
 
 import os
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import messagebox, filedialog
 from PIL import Image, ImageTk, ImageSequence
 import customtkinter as ctk
 import shutil
@@ -17,9 +17,14 @@ ctk.set_default_color_theme("blue")
 
 # ─────────────────────────── 전역 상태 정의 ───────────────────────────
 # STATE: READY(준비) / WORKING(작업중) 중앙 배경 이미지 전환
-# DEBUG: 디버그 모드 토글 상태
 STATE = "READY"
-DEBUG = False
+
+# 파일 경로 저장
+UPLOADED_FILES = {
+    "main": None,
+    "patients": None,
+    "Paymentitems": None
+}
 
 # 이미지 캐시 (참조 유지용)
 IMAGE_CACHE = {
@@ -34,49 +39,82 @@ def on_help():
     """도움말 창 또는 안내 로직 호출"""
     print("❓ 사용법")
 
-
-def on_detect():
-    """파일 감지 기능 실행 및 중앙 이미지 WORKING 상태로 전환"""
-    print("📂 파일 감지 실행")
-    update_center_image("WORKING")
-    
-    # 파일 감지 실행
-    found = update_file_labels()
-    
-    # 파일 감지 후 상태 업데이트
-    if found:
-        # 버튼 상태 업데이트를 위해 파일 다시 확인
-        main_file = find_main_file()
-        patients_file = find_file('patients')
-        payment_items = find_file('payments')
+def on_upload_main_file():
+    """메인 파일 업로드"""
+    file_path = filedialog.askopenfilename(
+        title="메인 파일 선택",
+        filetypes=(("Excel 파일", "*.xlsx"), ("CSV 파일", "*.csv"), ("모든 파일", "*.*"))
+    )
+    if file_path:
+        UPLOADED_FILES["main"] = file_path
+        main_file_name = os.path.basename(file_path)
         
-        # 버튼 상태 업데이트
-        root.after(100, lambda: update_button_states(main_file, patients_file, payment_items))
-        root.after(200, lambda: update_center_image("READY"))
-    # 파일을 못 찾은 경우는 WORKING 상태 유지
+        # 파일 정보 업데이트
+        update_file_labels()
+        
+        # 백업 생성
+        try:
+            backup_dir = "BACK UP"
+            os.makedirs(backup_dir, exist_ok=True)
+            backup_file = os.path.join(backup_dir, f"BACKUP_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{main_file_name}")
+            shutil.copy2(file_path, backup_file)
+            print(f"메인 파일 백업 생성 완료: {backup_file}")
+        except Exception as e:
+            print(f"백업 생성 중 오류 발생: {str(e)}")
+            
+        messagebox.showinfo("파일 업로드", f"메인 파일 업로드 완료: {main_file_name}")
 
+def on_upload_patients_file():
+    """환자 파일 업로드"""
+    file_path = filedialog.askopenfilename(
+        title="환자 파일 선택",
+        filetypes=(("Excel 파일", "*.xlsx"), ("CSV 파일", "*.csv"), ("모든 파일", "*.*"))
+    )
+    if file_path:
+        # 파일 이름이 'patients'로 시작하는지 확인
+        file_name = os.path.basename(file_path).lower()
+        if not file_name.startswith('patients'):
+            messagebox.showwarning("파일 형식 오류", "환자 파일은 'patients'로 시작해야 합니다.")
+            return
+            
+        UPLOADED_FILES["patients"] = file_path
+        update_file_labels()
+        messagebox.showinfo("파일 업로드", f"환자 파일 업로드 완료: {os.path.basename(file_path)}")
+
+def on_upload_Paymentitems_file():
+    """결제 파일 업로드"""
+    file_path = filedialog.askopenfilename(
+        title="결제 파일 선택",
+        filetypes=(("Excel 파일", "*.xlsx"), ("CSV 파일", "*.csv"), ("모든 파일", "*.*"))
+    )
+    if file_path:
+        # 파일 이름이 'Paymentitems'로 시작하는지 확인
+        file_name = os.path.basename(file_path).lower()
+        if not file_name.startswith('Paymentitems'):
+            messagebox.showwarning("파일 형식 오류", "결제 파일은 'Paymentitems'로 시작해야 합니다.")
+            return
+            
+        UPLOADED_FILES["Paymentitems"] = file_path
+        update_file_labels()
+        messagebox.showinfo("파일 업로드", f"결제 파일 업로드 완료: {os.path.basename(file_path)}")
 
 def on_table_update():
     """표 업데이트 기능 실행"""
     print("📊 표 업데이트 실행")
     
     # 메인 파일 존재 확인
-    main_file = find_main_file()
-    if not main_file:
-        messagebox.showerror("오류", "메인 파일을 찾을 수 없습니다. 파일 감지를 먼저 실행해주세요.")
+    if not UPLOADED_FILES["main"]:
+        messagebox.showerror("오류", "메인 파일을 찾을 수 없습니다. 파일을 먼저 업로드해주세요.")
         return
         
     # 필요한 파일 확인
-    patients_file = find_file('patients')
-    payment_items = find_file('payments')
-    
-    if not patients_file and not payment_items:
-        messagebox.showwarning("파일 없음", "Patients 파일과 Payments 파일이 모두 없습니다. 파일 감지를 먼저 실행해주세요.")
+    if not UPLOADED_FILES["patients"] and not UPLOADED_FILES["Paymentitems"]:
+        messagebox.showwarning("파일 없음", "Patients 파일과 Paymentitems 파일이 모두 없습니다. 파일을 먼저 업로드해주세요.")
         return
         
     # 메인 파일 접근 가능 여부 확인
-    if not check_file_access(main_file):
-        messagebox.showerror("오류", f"메인 파일이 열려있거나 접근할 수 없습니다.\n파일을 닫고 다시 시도해주세요: {main_file}")
+    if not check_file_access(UPLOADED_FILES["main"]):
+        messagebox.showerror("오류", f"메인 파일이 열려있거나 접근할 수 없습니다.\n파일을 닫고 다시 시도해주세요: {UPLOADED_FILES['main']}")
         return
         
     # 여기에 실제 표 업데이트 기능 구현
@@ -87,23 +125,15 @@ def on_patient_update():
     print("👥 환자 정보 업데이트 실행")
     
     # 메인 파일 존재 확인
-    main_file = find_main_file()
-    if not main_file:
-        messagebox.showerror("오류", "메인 파일을 찾을 수 없습니다. 파일 감지를 먼저 실행해주세요.")
+    if not UPLOADED_FILES["main"]:
+        messagebox.showerror("오류", "메인 파일을 찾을 수 없습니다. 파일을 먼저 업로드해주세요.")
         return
         
     # 메인 파일 접근 가능 여부 확인
-    if not check_file_access(main_file):
-        messagebox.showerror("오류", f"메인 파일이 열려있거나 접근할 수 없습니다.\n파일을 닫고 다시 시도해주세요: {main_file}")
+    if not check_file_access(UPLOADED_FILES["main"]):
+        messagebox.showerror("오류", f"메인 파일이 열려있거나 접근할 수 없습니다.\n파일을 닫고 다시 시도해주세요: {UPLOADED_FILES['main']}")
         return
         
-
-
-def on_debug_toggle():
-    """디버그 모드 On/Off 토글"""
-    global DEBUG
-    DEBUG = not DEBUG
-    print(f"🐞 디버그 모드 {'On' if DEBUG else 'Off'}")
 
 
 def on_exit():
@@ -116,14 +146,13 @@ def on_chart_update():
     print("📊 도표 업데이트 실행")
     
     # 메인 파일 존재 확인
-    main_file = find_main_file()
-    if not main_file:
-        messagebox.showerror("오류", "메인 파일을 찾을 수 없습니다. 파일 감지를 먼저 실행해주세요.")
+    if not UPLOADED_FILES["main"]:
+        messagebox.showerror("오류", "메인 파일을 찾을 수 없습니다. 파일을 먼저 업로드해주세요.")
         return
         
     # 메인 파일 접근 가능 여부 확인
-    if not check_file_access(main_file):
-        messagebox.showerror("오류", f"메인 파일이 열려있거나 접근할 수 없습니다.\n파일을 닫고 다시 시도해주세요: {main_file}")
+    if not check_file_access(UPLOADED_FILES["main"]):
+        messagebox.showerror("오류", f"메인 파일이 열려있거나 접근할 수 없습니다.\n파일을 닫고 다시 시도해주세요: {UPLOADED_FILES['main']}")
         return
         
     # 여기에 실제 도표 업데이트 기능 구현
@@ -147,26 +176,6 @@ def update_center_image(new_state):
         center_lbl.image = center_img  # 참조 유지
     else:
         print(f"[경고] 이미지 파일 없음: {img_file}")
-
-def find_main_file():
-    """메인 Excel/CSV 파일을 찾습니다('회원-sales'로 시작하는 파일)"""
-    for filename in os.listdir('.'):
-        lower_name = filename.lower()
-        if lower_name.startswith('회원-sales') and (lower_name.endswith('.xlsx') or lower_name.endswith('.csv')):
-            print(f"메인 파일 찾음: {filename}")
-            return filename
-    print("메인 파일을 찾을 수 없습니다.")
-    return None
-
-def find_file(prefix):
-    """특정 접두사로 시작하는 Excel/CSV 파일을 찾습니다"""
-    for filename in os.listdir('.'):
-        lower_name = filename.lower()
-        if lower_name.startswith(prefix.lower()) and (lower_name.endswith('.xlsx') or lower_name.endswith('.csv')):
-            print(f"{prefix} 파일 찾음: {filename}")
-            return filename
-    print(f"{prefix} 파일을 찾을 수 없습니다.")
-    return None
 
 def check_file_access(file_path):
     """파일 접근 가능 여부 확인 (다른 프로세스에서 열려있는지 확인)"""
@@ -195,10 +204,10 @@ def update_file_labels():
     # 필요한 폴더 생성
     setup_folders()
     
-    # 파일 찾기
-    main_file = find_main_file()
-    patients_file = find_file('patients')
-    payment_items = find_file('payments')
+    # 파일 정보 가져오기
+    main_file = os.path.basename(UPLOADED_FILES["main"]) if UPLOADED_FILES["main"] else None
+    patients_file = os.path.basename(UPLOADED_FILES["patients"]) if UPLOADED_FILES["patients"] else None
+    payment_items = os.path.basename(UPLOADED_FILES["Paymentitems"]) if UPLOADED_FILES["Paymentitems"] else None
     
     # 파일 감지 결과 출력
     file_summary = []
@@ -207,28 +216,28 @@ def update_file_labels():
     if patients_file:
         file_summary.append(f"Patients: {patients_file}")
     if payment_items:
-        file_summary.append(f"Payments: {payment_items}")
+        file_summary.append(f"Paymentitems: {payment_items}")
         
     if file_summary:
-        print(f"파일 감지 결과: {', '.join(file_summary)}")
+        print(f"파일 업로드 결과: {', '.join(file_summary)}")
     
     # 카드 레이블 업데이트
     file_rows = card.winfo_children()
     if len(file_rows) >= 3:
         # 메인 파일 레이블 업데이트
         main_row_labels = file_rows[0].winfo_children()
-        if len(main_row_labels) >= 2:
-            main_row_labels[1].configure(text=main_file if main_file else "없음")
+        if len(main_row_labels) >= 3:
+            main_row_labels[2].configure(text=main_file if main_file else "없음")
         
         # 환자 파일 레이블 업데이트
         patient_row_labels = file_rows[1].winfo_children()
-        if len(patient_row_labels) >= 2:
-            patient_row_labels[1].configure(text=patients_file if patients_file else "없음")
+        if len(patient_row_labels) >= 3:
+            patient_row_labels[2].configure(text=patients_file if patients_file else "없음")
         
         # 지불 파일 레이블 업데이트
         payment_row_labels = file_rows[2].winfo_children()
-        if len(payment_row_labels) >= 2:
-            payment_row_labels[1].configure(text=payment_items if payment_items else "없음")
+        if len(payment_row_labels) >= 3:
+            payment_row_labels[2].configure(text=payment_items if payment_items else "없음")
     
     # 상태 레이블 업데이트
     if not main_file:
@@ -242,31 +251,11 @@ def update_file_labels():
     update_button_states(main_file, patients_file, payment_items)
     
     # 메인 파일 접근 가능 여부 확인 (파일이 다른 프로그램에서 열려있는지)
-    if main_file and not check_file_access(main_file):
+    if main_file and not check_file_access(UPLOADED_FILES["main"]):
         messagebox.showerror("파일 접근 오류", f"메인 파일이 다른 프로그램에서 열려있어 접근할 수 없습니다.\n파일을 닫고 다시 시도해주세요: {main_file}")
         return False
     
-    # 파일 존재 여부에 따른 메시지 표시
-    if not main_file:
-        messagebox.showwarning("파일 감지", "메인 파일('회원-sales'로 시작하는 파일)을 찾을 수 없습니다.")
-        return False
-    elif not patients_file and not payment_items:
-        messagebox.showwarning("파일 감지", "Patients 파일과 Payments 파일이 모두 없습니다.")
-        return True
-    else:
-        # 파일이 모두 존재하면 백업 생성
-        try:
-            backup_dir = "BACK UP"
-            os.makedirs(backup_dir, exist_ok=True)
-            if main_file:
-                backup_file = os.path.join(backup_dir, f"BACKUP_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{main_file}")
-                shutil.copy2(main_file, backup_file)
-                print(f"메인 파일 백업 생성 완료: {backup_file}")
-        except Exception as e:
-            print(f"백업 생성 중 오류 발생: {str(e)}")
-        
-        messagebox.showinfo("파일 감지", "파일 감지 완료!")
-        return True
+    return True
 
 def create_hover_button(parent, gif, cb, tip, col):
     """아이콘 GIF 애니메이션 및 호버 팝업 기능 설정"""
@@ -432,7 +421,7 @@ def update_button_states(main_file, patients_file, payment_items):
     
     # 버튼을 이름으로 찾기
     button_frames = group.winfo_children()
-    if len(button_frames) < 5:
+    if len(button_frames) < 4:
         print("버튼 프레임을 찾을 수 없습니다.")
         return
 
@@ -444,11 +433,11 @@ def update_button_states(main_file, patients_file, payment_items):
     for idx, frame in enumerate(button_frames):
         for widget in frame.winfo_children():
             if isinstance(widget, tk.Label):
-                if idx == 1:  # 표 업데이트 버튼 (두 번째)
+                if idx == 0:  # 표 업데이트 버튼 (첫 번째)
                     table_update_label = widget
-                elif idx == 2:  # 환자 정보 업데이트 버튼 (세 번째)
+                elif idx == 1:  # 환자 정보 업데이트 버튼 (두 번째)
                     patient_update_label = widget
-                elif idx == 3:  # 도표 업데이트 버튼 (네 번째)
+                elif idx == 2:  # 도표 업데이트 버튼 (세 번째)
                     chart_update_label = widget
     
     # 메인 파일이 있으면 환자 정보 업데이트 버튼과 도표 업데이트 버튼 활성화
@@ -461,13 +450,13 @@ def update_button_states(main_file, patients_file, payment_items):
         if chart_update_label and hasattr(chart_update_label, 'enable'):
             chart_update_label.enable()
         
-        # 메인 파일과 Patients 또는 Payments 파일 중 하나라도 있으면 표 업데이트 버튼 활성화
+        # 메인 파일과 Patients 또는 Paymentitems 파일 중 하나라도 있으면 표 업데이트 버튼 활성화
         if patients_file or payment_items:
-            print("Patients 또는 Payments 파일 존재: 표 업데이트 버튼 활성화")
+            print("Patients 또는 Paymentitems 파일 존재: 표 업데이트 버튼 활성화")
             if table_update_label and hasattr(table_update_label, 'enable'):
                 table_update_label.enable()
         else:
-            print("Patients와 Payments 파일 모두 없음: 표 업데이트 버튼 비활성화")
+            print("Patients와 Paymentitems 파일 모두 없음: 표 업데이트 버튼 비활성화")
             # 필요한 다른 파일이 없으면 표 업데이트 버튼 비활성화
             if table_update_label and hasattr(table_update_label, 'disable'):
                 table_update_label.disable()
@@ -485,14 +474,14 @@ def update_button_states(main_file, patients_file, payment_items):
 # ─────────────────────────── 메인 윈도우 설정 ───────────────────────────
 BG = "#fff0e5"
 root = ctk.CTk()
-root.geometry("450x520")  # 너비를 360에서 450으로 증가
-root.title("케이닥 마크7 3.1")
+root.geometry("450x600")  # 세로 높이를 600으로 증가
+root.title("케이닥 마크7 4.0")
 root.configure(fg_color=BG)
 
 # 1) 상단 타이틀
 ctk.CTkLabel(
     master=root,
-    text="🌟 케이닥 마크7 3.1 🌟",
+    text="🌟 케이닥 마크7 4.0 🌟",
     font=("맑은 고딕", 18, "bold"),
     text_color="black"
 ).pack(pady=(30,8))
@@ -526,14 +515,13 @@ else:
 group = ctk.CTkFrame(master=root, fg_color="#FFF8E1", corner_radius=20,
                     border_width=1, border_color="#e0e0e0")
 group.pack(side="bottom", fill="x", padx=16, pady=(0,16))
-for i in range(5): group.grid_columnconfigure(i, weight=1)
+for i in range(4): group.grid_columnconfigure(i, weight=1)  # 4개 버튼만 사용
 
 # 5) 버튼 생성 및 애니메이션 + 팝업 설명
 ICON_DIR = os.path.join(os.path.dirname(__file__), "icon")
 icon_size = (64,64)
 SPEED = 1000//60
 buttons = [
-    ("파일 감지.gif", on_detect, "파일 감지"),
     ("표 업데이트.gif", on_table_update, "표 업데이트"),
     ("환자 정보 업데이트.gif", on_patient_update, "환자 정보 업데이트"),
     ("도표 업데이트.gif", on_chart_update, "도표 업데이트"),
@@ -542,26 +530,36 @@ buttons = [
 
 for idx,(g,cb,tip) in enumerate(buttons): create_hover_button(group, g, cb, tip, idx)
 
-# 6) 상태 표시 및 디버그 스위치
+# 6) 상태 표시
 status_frame = ctk.CTkFrame(master=root, fg_color="transparent")
 status_frame.pack(side="bottom", fill="x", padx=16, pady=(0,0))
 # 상태 레이블 왼쪽 여백을 12px로 설정해 메인파일 카드와 동일한 간격 유지
 status_lbl = ctk.CTkLabel(master=status_frame, text="(상태표시)", font=("맑은 고딕",11), text_color="#777777")
 status_lbl.pack(side="left", padx=(12,0))
-# 디버그 모드 토글 스위치
-debug_switch = ctk.CTkSwitch(master=status_frame, text="디버그 모드", command=on_debug_toggle)
-debug_switch.pack(side="right")
 
-# 7) 파일 매핑 카드
+# 7) 파일 업로드 카드
 card = ctk.CTkFrame(master=root, fg_color="white", corner_radius=16, border_width=1, border_color="#e0e0e0")
 card.pack(side="bottom", fill="x", padx=16, pady=(0,2))
-for txt in ("메인파일:","환자파일:","결제파일:"):
-    row = ctk.CTkFrame(master=card, fg_color="transparent")
-    row.pack(fill="x", padx=12, pady=0)
-    ctk.CTkLabel(master=row, text=txt, font=("맑은 고딕",12), text_color="#333333").pack(side="left")
-    ctk.CTkLabel(master=row, text="", font=("맑은 고딕",12), text_color="#555555").pack(side="left", padx=(6,0))
 
-# 8) 시작시 파일 감지 실행 및 버튼 상태 업데이트
+# 메인 파일 업로드 취소 함수
+def cancel_main_file():
+    UPLOADED_FILES["main"] = None
+    update_file_labels()
+    messagebox.showinfo("업로드 취소", "메인 파일 업로드가 취소되었습니다.")
+
+# 환자 파일 업로드 취소 함수
+def cancel_patients_file():
+    UPLOADED_FILES["patients"] = None
+    update_file_labels()
+    messagebox.showinfo("업로드 취소", "환자 파일 업로드가 취소되었습니다.")
+
+# 결제 파일 업로드 취소 함수
+def cancel_Paymentitems_file():
+    UPLOADED_FILES["Paymentitems"] = None
+    update_file_labels()
+    messagebox.showinfo("업로드 취소", "결제 파일 업로드가 취소되었습니다.")
+
+# 8) 시작시 앱 초기화
 def init_app():
     """앱 초기화: 기본 상태 설정"""
     print("앱 초기화 중...")
@@ -569,16 +567,16 @@ def init_app():
     setup_folders()
     
     # 상태 레이블 초기화
-    status_lbl.configure(text="파일 감지가 필요합니다", text_color="#555555")
+    status_lbl.configure(text="파일 업로드가 필요합니다", text_color="#555555")
     
-    # 기본 버튼 상태 설정 - 파일 감지 버튼과 종료 버튼만 활성화
+    # 기본 버튼 상태 설정 - 종료 버튼만 활성화하고 나머지는 비활성화
     button_frames = group.winfo_children()
-    if len(button_frames) >= 5:
+    if len(button_frames) >= 4:
         # 표 업데이트, 환자 정보 업데이트, 도표 업데이트 버튼 비활성화
         for idx, frame in enumerate(button_frames):
             for widget in frame.winfo_children():
                 if isinstance(widget, tk.Label):
-                    if idx in [1, 2, 3] and hasattr(widget, 'disable'):  # 표 업데이트, 환자 정보, 도표 업데이트 버튼
+                    if idx in [0, 1, 2] and hasattr(widget, 'disable'):  # 표 업데이트, 환자 정보, 도표 업데이트 버튼
                         widget.disable()
     
     print("앱 초기화 완료")
