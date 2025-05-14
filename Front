@@ -212,10 +212,15 @@ def on_table_update():
     
     try:
         # 환자 정보 업데이트 여부 확인
-        update_patient_info = messagebox.askyesno("확인", "환자 정보를 업데이트하시겠습니까?")
+        update_patient_info = messagebox.askyesno("확인", "환자 정보도 같이 업데이트 하시겠습니까?")
         
         # ExcelBackend를 사용하여 표 업데이트 실행
         logger.info("백엔드 표 업데이트 작업 시작")
+        logger.info(f"메인 파일: {UPLOADED_FILES['main']}")
+        logger.info(f"환자 파일: {UPLOADED_FILES['patients']}")
+        logger.info(f"결제 파일: {UPLOADED_FILES['Paymentitems']}")
+        logger.info(f"환자 정보 업데이트: {update_patient_info}")
+        
         result = processor.run_table_update(
             main_file=UPLOADED_FILES["main"],
             patients_file=UPLOADED_FILES["patients"],
@@ -321,41 +326,47 @@ def on_exit():
     sys.exit(0)  # 프로세스 강제 종료
 
 def on_chart_update():
-    """도표 업데이트 기능 실행"""
-    logger.info("도표 업데이트 시작")
-    
-    # 메인 파일 존재 확인
+    """도표 업데이트 버튼 클릭 시 실행되는 함수"""
     if not UPLOADED_FILES["main"]:
-        logger.error("메인 파일 없음")
-        messagebox.showerror("오류", "메인 파일을 찾을 수 없습니다. 파일을 먼저 업로드해주세요.")
-        return
-        
-    # 메인 파일 접근 가능 여부 확인
-    if not check_file_access(UPLOADED_FILES["main"]):
-        logger.error(f"메인 파일 접근 불가: {UPLOADED_FILES['main']}")
-        messagebox.showerror("오류", f"메인 파일이 열려있거나 접근할 수 없습니다.\n파일을 닫고 다시 시도해주세요: {UPLOADED_FILES['main']}")
+        messagebox.showerror("오류", "메인 파일을 먼저 업로드해주세요.")
         return
     
-    # 작업 시작 시 상태를 "WORKING"으로 변경
+    # 메인 파일이 다른 프로그램에서 열려있는지 확인
+    if not processor.check_file_access(UPLOADED_FILES["main"]):
+        messagebox.showerror("오류", "메인 파일이 다른 프로그램에서 열려있습니다.\n파일을 닫고 다시 시도해주세요.")
+        return
+    
+    # UI 상태 업데이트
     update_center_image("WORKING")
     root.update()  # UI 즉시 업데이트
     
     try:
-        # 여기에 실제 도표 업데이트 기능 구현
-        # 작업 수행...
-        logger.info("도표 업데이트 완료")
+        # 백엔드 도표 업데이트 작업 실행
+        logger.info("백엔드 도표 업데이트 작업 시작")
+        result = processor.run_chart_update(main_file=UPLOADED_FILES["main"])
         
-        # 작업 완료 후 파일 상태 초기화
-        UPLOADED_FILES["Paymentitems"] = None
-        update_file_labels()
-        
-        # 작업 완료 후 원래 상태로 복원
-        update_center_image("READY" if UPLOADED_FILES["main"] else "READY_NO_MAIN")
+        if result["success"]:
+            logger.info("도표 업데이트 성공")
+            messagebox.showinfo("성공", result["msg"])
+            
+            # 엑셀 파일 열어볼지 물어보기
+            if messagebox.askyesno("완료", "도표 업데이트가 완료되었습니다.\n엑셀 파일을 열어보시겠습니까?"):
+                try:
+                    os.startfile(UPLOADED_FILES["main"])
+                except Exception as e:
+                    logger.error(f"엑셀 파일 열기 실패: {str(e)}")
+                    messagebox.showerror("오류", "엑셀 파일을 열 수 없습니다.")
+        else:
+            logger.error(f"도표 업데이트 실패: {result['msg']}")
+            messagebox.showerror("오류", result["msg"])
+    
     except Exception as e:
         logger.error(f"도표 업데이트 중 오류 발생: {str(e)}")
         messagebox.showerror("오류", f"도표 업데이트 중 오류가 발생했습니다: {str(e)}")
-        # 오류 발생 시에도 원래 상태로 복원
-        update_center_image("READY" if UPLOADED_FILES["main"] else "READY_NO_MAIN")
+    
+    finally:
+        # UI 상태 복원
+        update_center_image("READY")
 
 def toggle_logging():
     """로그 기록 토글"""
