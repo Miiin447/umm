@@ -39,7 +39,7 @@ class ExcelBackend:
         self.logger.addHandler(console_handler)
         
         # 제외할 키워드 목록
-        self.excluded_keywords = {'heale', 'tele', 'develop', 'test', 'patient', 'kdoc'}
+        self.excluded_keywords = {'heale', 'tele', 'develop', 'test', 'patient', 'kdoc', 'k-doc', 'k- doc'}
         self.logger.info("ExcelBackend 초기화 완료")
 
     def should_exclude_row(self, row_data):
@@ -115,10 +115,20 @@ class ExcelBackend:
             self.logger.warning(f"파일이 다른 프로세스에 의해 잠겨 있습니다: {file_path}")
             return False
 
-    def find_table(self, table_name, workbook):
-        """테이블 찾기 함수 개선"""
+    def find_table(self, table_name, workbook_or_sheet):
+        """테이블 찾기 함수 개선 (워크북 또는 시트 모두 지원)"""
         self.logger.info(f"테이블 찾기 시작: {table_name}")
-        for sheet in workbook.worksheets:
+        # 시트 객체가 들어오면 그 시트에서만 찾기
+        if hasattr(workbook_or_sheet, 'tables') and hasattr(workbook_or_sheet, 'title'):
+            for table in workbook_or_sheet.tables.values():
+                self.logger.debug(f"테이블 이름: {table.name}")
+                if table_name in table.name:
+                    self.logger.info(f"테이블 찾음: {table.name} (시트: {workbook_or_sheet.title})")
+                    return table
+            self.logger.warning(f"테이블을 찾을 수 없음: {table_name}")
+            return None
+        # 워크북 객체면 전체 시트에서 찾기
+        for sheet in workbook_or_sheet.worksheets:
             self.logger.debug(f"시트 검색 중: {sheet.title}")
             for table in sheet.tables.values():
                 self.logger.debug(f"테이블 이름: {table.name}")
@@ -201,21 +211,16 @@ class ExcelBackend:
             self.logger.info(f"나이 열: {age_col} ({col_to_letter.get('Age', col_to_letter.get('나이', '?'))})")
             self.logger.info(f"성별 열: {gender_col} ({col_to_letter.get('성별', '?')})")
             
-            # 기존 데이터 수집 (등록 날짜도 표준화된 형식으로)
+            # 기존 데이터 수집 (이름, 생년월일, 성별, 주만으로 중복 체크)
             existing_records = set()
             for row in range(min_row + 1, max_row + 1):
                 name = self.standardize_value(patients_sheet.cell(row=row, column=name_col).value, preserve_format=True)
                 dob = self.standardize_value(patients_sheet.cell(row=row, column=dob_col).value, preserve_format=True) if dob_col else ""
-                reg_date = self.standardize_date(patients_sheet.cell(row=row, column=reg_date_col).value) if reg_date_col else ""
-                state = self.standardize_value(patients_sheet.cell(row=row, column=state_col).value, preserve_format=True) if state_col else ""
-                age_range = self.standardize_value(patients_sheet.cell(row=row, column=age_range_col).value, preserve_format=True) if age_range_col else ""
-                age = self.standardize_value(patients_sheet.cell(row=row, column=age_col).value, preserve_format=True) if age_col else ""
                 gender = self.standardize_value(patients_sheet.cell(row=row, column=gender_col).value, preserve_format=True) if gender_col else ""
-                
-                # 모든 필드를 포함한 중복 체크
-                record = (name, dob, reg_date, state, age_range, age, gender)
+                state = self.standardize_value(patients_sheet.cell(row=row, column=state_col).value, preserve_format=True) if state_col else ""
+                record = (name, dob, gender, state)
                 existing_records.add(record)
-                self.logger.debug(f"기존 데이터 수집: {record}")
+                self.logger.debug(f"기존 데이터 수집(이름,생년월일,성별,주): {record}")
 
             added_count = 0
             skipped_count = 0
@@ -223,27 +228,18 @@ class ExcelBackend:
             for idx, row in patients_df.iterrows():
                 name = self.standardize_value(row.get("이름", ""), preserve_format=True)
                 dob = self.standardize_value(row.get("생년월일", ""), preserve_format=True)
-                reg_date = row.get("등록 날짜", "")  # 이미 표준화된 형식
-                state = self.standardize_value(row.get("현재 있는 주", ""), preserve_format=True)
-                age_range = self.standardize_value(row.get("Age_Range", row.get("연령대", "")), preserve_format=True)
-                age = self.standardize_value(row.get("Age", row.get("나이", "")), preserve_format=True)
                 gender = self.standardize_value(row.get("성별", ""), preserve_format=True)
-                
-                # 모든 필드를 포함한 중복 체크
-                record = (name, dob, reg_date, state, age_range, age, gender)
-                
+                state = self.standardize_value(row.get("현재 있는 주", ""), preserve_format=True)
+                record = (name, dob, gender, state)
                 if record in existing_records:
-                    self.logger.info(f"중복 데이터 건너뛰기: {name} (모든 필드가 일치)")
+                    self.logger.info(f"중복 데이터 건너뛰기: {name} (이름,생년월일,성별,주 동일)")
                     skipped_count += 1
                     continue
                 
                 self.logger.info(f"\n=== 새로운 환자 데이터 처리 ===")
                 self.logger.info(f"이름: {name}")
                 self.logger.info(f"생년월일: {dob}")
-                self.logger.info(f"등록 날짜: {reg_date}")
                 self.logger.info(f"주: {state}")
-                self.logger.info(f"연령대: {age_range}")
-                self.logger.info(f"나이: {age}")
                 self.logger.info(f"성별: {gender}")
                     
                 max_row += 1
@@ -528,108 +524,6 @@ class ExcelBackend:
             self.logger.error(f"결제 항목 처리 중 오류 발생: {str(e)}", exc_info=True)
             return {"success": False, "msg": str(e)}
 
-    def calculate_age_from_birthdate(self, birthdate_str):
-        if not birthdate_str or pd.isna(birthdate_str):
-            return None
-        try:
-            # "11월 25, 1980" 형식 처리
-            if "월" in birthdate_str and "," in birthdate_str:
-                month = int(birthdate_str.split("월")[0])
-                day = int(birthdate_str.split(",")[0].split("월")[1].strip())
-                year = int(birthdate_str.split(",")[1].strip())
-                
-                birth_date = datetime(year, month, day)
-                today = datetime.now()
-                
-                # 엑셀의 DATEDIF 함수와 동일한 계산
-                age = today.year - birth_date.year
-                if (today.month, today.day) < (birth_date.month, birth_date.day):
-                    age -= 1
-                
-                return age
-            return None
-        except Exception as e:
-            self.logger.warning(f"나이 계산 실패: {birthdate_str} -> {str(e)}")
-            return None
-
-    def get_age_range(self, age):
-        if age is None:
-            self.logger.warning("나이가 None이어서 연령대를 계산할 수 없음")
-            return None
-        try:
-            if age < 20:
-                return "10s"
-            elif age < 30:
-                return "20s"
-            elif age < 40:
-                return "30s"
-            elif age < 50:
-                return "40s"
-            elif age < 60:
-                return "50s"
-            elif age < 70:
-                return "60s"
-            else:
-                return "70+"
-        except Exception as e:
-            self.logger.warning(f"연령대 계산 중 오류 발생: {age} -> {str(e)}")
-            return None
-
-    def run_table_update(self, main_file, patients_file=None, payment_file=None, update_patient_info=True):
-        try:
-            self.logger.info("테이블 업데이트 작업 시작")
-            
-            # 메인 파일만 체크
-            if not os.path.exists(main_file):
-                self.logger.error(f"메인 파일이 존재하지 않습니다: {main_file}")
-                return {"success": False, "msg": "메인 파일이 존재하지 않습니다"}
-            
-            backup_dir = os.path.join(os.path.dirname(main_file), "BACK UP")
-            os.makedirs(backup_dir, exist_ok=True)
-            backup_file = os.path.join(backup_dir, f"BACKUP_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{os.path.basename(main_file)}")
-            shutil.copy2(main_file, backup_file)
-            self.logger.info(f"파일 백업 완료: {backup_file}")
-            
-            result = {}
-            
-            # 환자 파일 처리
-            if patients_file and os.path.exists(patients_file):
-                self.logger.info("환자 파일 처리 시작")
-                result['patients'] = self.process_patients_file(main_file, patients_file)
-                if not result['patients']['success']:
-                    self.logger.error("환자 파일 처리 실패")
-                    return result
-            else:
-                self.logger.info("환자 파일이 없어 처리하지 않습니다")
-                result['patients'] = {"success": True, "msg": "환자 파일 없음"}
-            
-            # 결제 파일 처리
-            if payment_file and os.path.exists(payment_file):
-                self.logger.info("결제 파일 처리 시작")
-                result['payments'] = self.process_PaymentItems_items(main_file, payment_file)
-                if not result['payments']['success']:
-                    self.logger.error("결제 파일 처리 실패")
-                    return result
-            else:
-                self.logger.info("결제 파일이 없어 처리하지 않습니다")
-                result['payments'] = {"success": True, "msg": "결제 파일 없음"}
-            
-            # 환자 정보 업데이트 여부 확인
-            if update_patient_info:
-                result['update'] = self.run_patient_update(main_file)
-                if not result['update']['success']:
-                    self.logger.error("환자 정보 업데이트 실패")
-                    return result
-            else:
-                self.logger.info("환자 정보 업데이트를 건너뜁니다")
-                result['update'] = {"success": True, "msg": "환자 정보 업데이트 건너뜀"}
-            
-            self.logger.info("테이블 업데이트 작업 완료")
-            return {"success": True, "msg": "표 업데이트 전체 완료", "detail": result}
-        except Exception as e:
-            self.logger.error(f"테이블 업데이트 중 오류 발생: {str(e)}", exc_info=True)
-            return {"success": False, "msg": str(e)}
-
     def run_patient_update(self, main_file):
         try:
             self.logger.info("환자 정보 업데이트 시작")
@@ -749,10 +643,16 @@ class ExcelBackend:
                         cell.value = data["나이"]
                         cell.number_format = '@'
                     
-                    # 성별 업데이트
+                    # 성별 업데이트 (male/female -> 남/여)
                     if "성별" in customer_headers:
                         cell = customer_sheet.cell(row=row, column=customer_headers["성별"])
-                        cell.value = data["성별"]
+                        gender_val = data["성별"].strip().lower() if data["성별"] else ""
+                        if gender_val == "male":
+                            cell.value = "남"
+                        elif gender_val == "female":
+                            cell.value = "여"
+                        else:
+                            cell.value = data["성별"]
                         cell.number_format = '@'
                     
                     # 주 업데이트
@@ -776,7 +676,7 @@ class ExcelBackend:
             if len(empty_rows) == c_max_row - c_min_row:
                 empty_rows.remove(c_min_row + 1)  # 첫 번째 행은 보존
             
-            # 공란인 행 삭제 (역순으로 삭제하여 인덱스 변화 방지)
+            # 빈 행 삭제 (역순으로 삭제하여 인덱스 변화 방지)
             deleted_count = 0
             for row in sorted(empty_rows, reverse=True):
                 customer_sheet.delete_rows(row)
@@ -795,6 +695,290 @@ class ExcelBackend:
         except Exception as e:
             self.logger.error(f"환자 정보 업데이트 중 오류 발생: {str(e)}", exc_info=True)
             return {"success": False, "msg": str(e)}
+
+    def run_table_update(self, main_file, patients_file=None, payment_file=None, update_patient_info=True):
+        try:
+            self.logger.info("테이블 업데이트 작업 시작")
+            
+            # 메인 파일만 체크
+            if not os.path.exists(main_file):
+                self.logger.error(f"메인 파일이 존재하지 않습니다: {main_file}")
+                return {"success": False, "msg": "메인 파일이 존재하지 않습니다"}
+            
+            backup_dir = os.path.join(os.path.dirname(main_file), "BACK UP")
+            os.makedirs(backup_dir, exist_ok=True)
+            backup_file = os.path.join(backup_dir, f"BACKUP_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{os.path.basename(main_file)}")
+            shutil.copy2(main_file, backup_file)
+            self.logger.info(f"파일 백업 완료: {backup_file}")
+            
+            result = {}
+            
+            # 환자 파일 처리
+            if patients_file and os.path.exists(patients_file):
+                self.logger.info("환자 파일 처리 시작")
+                result['patients'] = self.process_patients_file(main_file, patients_file)
+                if not result['patients']['success']:
+                    self.logger.error("환자 파일 처리 실패")
+                    return result
+            else:
+                self.logger.info("환자 파일이 없어 처리하지 않습니다")
+                result['patients'] = {"success": True, "msg": "환자 파일 없음"}
+            
+            # 결제 파일 처리
+            if payment_file and os.path.exists(payment_file):
+                self.logger.info("결제 파일 처리 시작")
+                result['payments'] = self.process_PaymentItems_items(main_file, payment_file)
+                if not result['payments']['success']:
+                    self.logger.error("결제 파일 처리 실패")
+                    return result
+            else:
+                self.logger.info("결제 파일이 없어 처리하지 않습니다")
+                result['payments'] = {"success": True, "msg": "결제 파일 없음"}
+            
+            # 환자 정보 업데이트 여부 확인
+            if update_patient_info:
+                result['update'] = self.run_patient_update(main_file)
+                if not result['update']['success']:
+                    self.logger.error("환자 정보 업데이트 실패")
+                    return result
+            else:
+                self.logger.info("환자 정보 업데이트를 건너뜁니다")
+                result['update'] = {"success": True, "msg": "환자 정보 업데이트 건너뜀"}
+            
+            self.logger.info("테이블 업데이트 작업 완료")
+            return {"success": True, "msg": "표 업데이트 전체 완료", "detail": result}
+        except Exception as e:
+            self.logger.error(f"테이블 업데이트 중 오류 발생: {str(e)}", exc_info=True)
+            return {"success": False, "msg": str(e)}
+
+    def calculate_age_from_birthdate(self, birthdate_str):
+        if not birthdate_str or pd.isna(birthdate_str):
+            return None
+        try:
+            # "11월 25, 1980" 형식 처리
+            if "월" in birthdate_str and "," in birthdate_str:
+                month = int(birthdate_str.split("월")[0])
+                day = int(birthdate_str.split(",")[0].split("월")[1].strip())
+                year = int(birthdate_str.split(",")[1].strip())
+                
+                birth_date = datetime(year, month, day)
+                today = datetime.now()
+                
+                # 엑셀의 DATEDIF 함수와 동일한 계산
+                age = today.year - birth_date.year
+                if (today.month, today.day) < (birth_date.month, birth_date.day):
+                    age -= 1
+                
+                return age
+            return None
+        except Exception as e:
+            self.logger.warning(f"나이 계산 실패: {birthdate_str} -> {str(e)}")
+            return None
+
+    def get_age_range(self, age):
+        if age is None:
+            self.logger.warning("나이가 None이어서 연령대를 계산할 수 없음")
+            return None
+        try:
+            if age < 20:
+                return "10s"
+            elif age < 30:
+                return "20s"
+            elif age < 40:
+                return "30s"
+            elif age < 50:
+                return "40s"
+            elif age < 60:
+                return "50s"
+            elif age < 70:
+                return "60s"
+            else:
+                return "70+"
+        except Exception as e:
+            self.logger.warning(f"연령대 계산 중 오류 발생: {age} -> {str(e)}")
+            return None
+
+    def run_chart_update(self, main_file):
+        """도표 업데이트 기능 실행"""
+        self.logger.info("도표 업데이트 시작")
+        self.logger.info(f"메인 파일: {main_file}")
+        try:
+            # 메인 파일 존재 확인
+            if not os.path.exists(main_file):
+                self.logger.error(f"메인 파일이 존재하지 않음: {main_file}")
+                return {"success": False, "msg": "메인 파일을 찾을 수 없습니다."}
+            
+            # 메인 파일 로드
+            self.logger.info("메인 파일 로드 시작")
+            wb = load_workbook(main_file)
+            self.logger.info("메인 파일 로드 완료")
+            
+            # 현재 달 계산
+            today = datetime.now()
+            current_month = today.month
+            current_year = today.year
+            month_str = str(current_month)
+            self.logger.info(f"현재 달 계산: {current_month}월")
+            
+            # 새로운 시트 이름
+            new_patients_sheet_name = f"{month_str}월_회원"
+            new_payment_sheet_name = f"{month_str}월_진료"
+            self.logger.info(f"새로운 시트 이름: {new_patients_sheet_name}, {new_payment_sheet_name}")
+            
+            # 기존 시트 찾기
+            existing_patients_sheet = None
+            existing_payment_sheet = None
+            old_patients_name = None
+            old_payment_name = None
+            for sheet_name in wb.sheetnames:
+                if sheet_name.endswith("_회원"):
+                    existing_patients_sheet = wb[sheet_name]
+                    old_patients_name = sheet_name
+                    self.logger.info(f"기존 회원 시트 발견: {sheet_name}")
+                elif sheet_name.endswith("_진료"):
+                    existing_payment_sheet = wb[sheet_name]
+                    old_payment_name = sheet_name
+                    self.logger.info(f"기존 진료 시트 발견: {sheet_name}")
+            if not existing_patients_sheet or not existing_payment_sheet:
+                self.logger.error("필요한 시트를 찾을 수 없음")
+                return {"success": False, "msg": "필요한 시트를 찾을 수 없습니다."}
+            # 시트 이름 변경
+            self.logger.info(f"시트 이름 변경 시도: {old_patients_name} → {new_patients_sheet_name}")
+            if existing_patients_sheet.title != new_patients_sheet_name:
+                existing_patients_sheet.title = new_patients_sheet_name
+                self.logger.info(f"회원 시트 이름 변경 완료: {old_patients_name} → {existing_patients_sheet.title}")
+            else:
+                self.logger.info(f"회원 시트 이름이 이미 {new_patients_sheet_name}임")
+            self.logger.info(f"시트 이름 변경 시도: {old_payment_name} → {new_payment_sheet_name}")
+            if existing_payment_sheet.title != new_payment_sheet_name:
+                existing_payment_sheet.title = new_payment_sheet_name
+                self.logger.info(f"진료 시트 이름 변경 완료: {old_payment_name} → {existing_payment_sheet.title}")
+            else:
+                self.logger.info(f"진료 시트 이름이 이미 {new_payment_sheet_name}임")
+            # 시트 이름 변경 후 저장
+            wb.save(main_file)
+            self.logger.info(f"시트 이름 변경 후 저장 완료: {main_file}")
+            # 테이블 찾기
+            patients_table = self.find_table("최근환자", existing_patients_sheet)
+            payment_table = self.find_table("최근진료", existing_payment_sheet)
+            if not patients_table:
+                self.logger.error("최근환자 테이블을 찾을 수 없음")
+                return {"success": False, "msg": "최근환자 테이블을 찾을 수 없습니다."}
+            if not payment_table:
+                self.logger.error("최근진료 테이블을 찾을 수 없음")
+                return {"success": False, "msg": "최근진료 테이블을 찾을 수 없습니다."}
+            # 환자자동, 고객관리자동 테이블 찾기
+            auto_patients_table = self.find_table("환자자동", wb)
+            auto_customers_table = self.find_table("고객관리자동", wb)
+            if not auto_patients_table or not auto_customers_table:
+                self.logger.error("환자자동/고객관리자동 테이블을 찾을 수 없음")
+                return {"success": False, "msg": "환자자동/고객관리자동 테이블을 찾을 수 없습니다."}
+            # 시트 찾기
+            auto_patients_sheet = None
+            auto_customers_sheet = None
+            for sheet in wb.worksheets:
+                if auto_patients_table in sheet.tables.values():
+                    auto_patients_sheet = sheet
+                if auto_customers_table in sheet.tables.values():
+                    auto_customers_sheet = sheet
+            # 테이블 범위
+            p_min_col, p_min_row, p_max_col, p_max_row = range_boundaries(patients_table.ref)
+            py_min_col, py_min_row, py_max_col, py_max_row = range_boundaries(payment_table.ref)
+            ap_min_col, ap_min_row, ap_max_col, ap_max_row = range_boundaries(auto_patients_table.ref)
+            ac_min_col, ac_min_row, ac_max_col, ac_max_row = range_boundaries(auto_customers_table.ref)
+            # 헤더 추출
+            patients_headers = [existing_patients_sheet.cell(row=p_min_row, column=col).value for col in range(p_min_col, p_max_col+1)]
+            auto_patients_headers = [auto_patients_sheet.cell(row=ap_min_row, column=col).value for col in range(ap_min_col, ap_max_col+1)]
+            payment_headers = [existing_payment_sheet.cell(row=py_min_row, column=col).value for col in range(py_min_col, py_max_col+1)]
+            auto_customers_headers = [auto_customers_sheet.cell(row=ac_min_row, column=col).value for col in range(ac_min_col, ac_max_col+1)]
+            # 최근달 데이터만 추출 (등록 날짜/등록날짜 기준)
+            # 환자자동 → 최근환자
+            recent_rows = []
+            for row in range(ap_min_row+1, ap_max_row+1):
+                date_val = auto_patients_sheet.cell(row=row, column=auto_patients_headers.index("등록 날짜")+ap_min_col).value
+                if date_val:
+                    # 날짜 파싱
+                    try:
+                        if "년" in str(date_val) and "월" in str(date_val):
+                            y = int(str(date_val).split("년")[0])
+                            m = int(str(date_val).split("년")[1].split("월")[0].strip())
+                            if y == current_year and m == current_month:
+                                recent_rows.append(row)
+                    except:
+                        continue
+            # 기존 데이터 삭제 (헤더 제외)
+            for row in range(p_min_row+1, p_max_row+1):
+                for col in range(p_min_col, p_max_col+1):
+                    existing_patients_sheet.cell(row=row, column=col).value = None
+            # 붙여넣기
+            for i, src_row in enumerate(recent_rows):
+                for j, header in enumerate(patients_headers):
+                    if header in auto_patients_headers:
+                        src_col = auto_patients_headers.index(header) + ap_min_col
+                        dst_col = p_min_col + j
+                        val = auto_patients_sheet.cell(row=src_row, column=src_col).value
+                        existing_patients_sheet.cell(row=p_min_row+1+i, column=dst_col).value = val
+            # 테이블 ref 조정 (최근환자)
+            last_row = p_min_row + len(recent_rows)
+            patients_table.ref = f"{get_column_letter(p_min_col)}{p_min_row}:{get_column_letter(p_max_col)}{last_row}"
+
+            # 고객관리자동 → 최근진료
+            recent_rows2 = []
+            for row in range(ac_min_row+1, ac_max_row+1):
+                date_val = auto_customers_sheet.cell(row=row, column=auto_customers_headers.index("등록날짜")+ac_min_col).value
+                if date_val:
+                    try:
+                        if "년" in str(date_val) and "월" in str(date_val):
+                            y = int(str(date_val).split("년")[0])
+                            m = int(str(date_val).split("년")[1].split("월")[0].strip())
+                            if y == current_year and m == current_month:
+                                recent_rows2.append(row)
+                    except:
+                        continue
+            # 기존 데이터 삭제 (헤더 제외)
+            for row in range(py_min_row+1, py_max_row+1):
+                for col in range(py_min_col, py_max_col+1):
+                    existing_payment_sheet.cell(row=row, column=col).value = None
+            # 붙여넣기
+            for i, src_row in enumerate(recent_rows2):
+                for j, header in enumerate(payment_headers):
+                    if header in auto_customers_headers:
+                        src_col = auto_customers_headers.index(header) + ac_min_col
+                        dst_col = py_min_col + j
+                        val = auto_customers_sheet.cell(row=src_row, column=src_col).value
+                        existing_payment_sheet.cell(row=py_min_row+1+i, column=dst_col).value = val
+            # 테이블 ref 조정 (최근진료)
+            last_row2 = py_min_row + len(recent_rows2)
+            payment_table.ref = f"{get_column_letter(py_min_col)}{py_min_row}:{get_column_letter(py_max_col)}{last_row2}"
+
+            # 수식 업데이트 (기존 코드)
+            updated_formulas = 0
+            for sheet in wb.worksheets:
+                for row in sheet.iter_rows():
+                    for cell in row:
+                        if cell.value and isinstance(cell.value, str) and cell.value.startswith('='):
+                            formula = cell.value
+                            if old_patients_name and old_patients_name in formula:
+                                formula = formula.replace(old_patients_name, new_patients_sheet_name)
+                                updated_formulas += 1
+                            if old_payment_name and old_payment_name in formula:
+                                formula = formula.replace(old_payment_name, new_payment_sheet_name)
+                                updated_formulas += 1
+                            cell.value = formula
+            self.logger.info(f"수식 업데이트 완료: {updated_formulas}개의 수식이 업데이트됨")
+            wb.save(main_file)
+            return {
+                "success": True,
+                "msg": "도표 업데이트가 완료되었습니다.",
+                "detail": {
+                    "patients": {"msg": f"회원 데이터가 {new_patients_sheet_name}에 복사되었습니다."},
+                    "payment": {"msg": f"진료 데이터가 {new_payment_sheet_name}에 복사되었습니다."},
+                    "formulas": {"msg": f"{updated_formulas}개의 수식이 업데이트되었습니다."}
+                }
+            }
+        except Exception as e:
+            self.logger.error(f"도표 업데이트 중 오류 발생: {str(e)}")
+            return {"success": False, "msg": f"도표 업데이트 중 오류가 발생했습니다: {str(e)}"}
 
 if __name__ == "__main__":
     backend = ExcelBackend()
