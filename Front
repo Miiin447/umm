@@ -113,9 +113,109 @@ IMAGE_CACHE = {
 # ─────────────────────────── 콜백 함수 정의 ───────────────────────────
 
 def on_help():
-    """도움말 창 또는 안내 로직 호출"""
+    """도움말 창 표시"""
     logger.info("도움말 버튼 클릭")
-    print("❓ 사용법")
+    
+    # 도움말 창 생성
+    help_window = ctk.CTkToplevel(root)
+    help_window.title("케이닥 마크7 4.0 사용법")
+    help_window.geometry("600x700")
+    help_window.resizable(False, False)
+    
+    # 스크롤 가능한 프레임 생성
+    scroll_frame = ctk.CTkScrollableFrame(help_window, width=580, height=680)
+    scroll_frame.pack(fill="both", expand=True, padx=10, pady=10)
+    
+    # 도움말 내용
+    help_content = [
+        ("🌟 프로그램 소개", """
+        케이닥 마크7 4.0은 환자 정보와 결제 정보를 효율적으로 관리하는 프로그램입니다.
+        메인 파일에 환자 정보와 결제 정보를 자동으로 업데이트하여 작업 시간을 단축시켜 줍니다.
+        """),
+        
+        ("📁 파일 준비", """
+        1. 메인 파일: 업데이트할 엑셀 파일입니다.
+        2. 환자 파일: 'patients'로 시작하는 CSV 파일입니다.
+        3. 결제 파일: 'PaymentItems'로 시작하는 CSV 파일입니다.
+        """),
+        
+        ("🔧 기본 사용법", """
+        1. 메인 파일 업로드
+           - '업로드' 버튼을 클릭하여 메인 파일을 선택합니다.
+           - 파일이 다른 프로그램에서 열려있지 않은지 확인합니다.
+        
+        2. 환자/결제 파일 업로드
+           - 필요한 파일을 '업로드' 버튼으로 선택합니다.
+           - 파일명이 올바른 형식인지 확인합니다.
+        
+        3. 원하는 기능 실행
+           - 표 업데이트: 환자/결제 정보를 메인 파일에 업데이트
+           - 환자 정보 업데이트: 환자 정보만 업데이트
+           - 도표 업데이트: 선택한 달의 도표 생성
+        """),
+        
+        ("⚠️ 주의사항", """
+        1. 메인 파일이 다른 프로그램에서 열려있으면 작업이 불가능합니다.
+        2. 파일 업로드 전에 파일명이 올바른 형식인지 확인하세요.
+        3. 작업 중에는 프로그램을 종료하지 마세요.
+        4. 중요한 파일은 자동으로 백업됩니다.
+        """),
+        
+        ("💡 팁", """
+        1. 로그 기능을 켜두면 문제 발생 시 원인 파악이 쉽습니다.
+        2. 파일 업로드 후 상태 표시줄을 확인하세요.
+        3. 작업 완료 후 엑셀 파일을 자동으로 열어볼 수 있습니다.
+        """),
+        
+        ("❓ 문제 해결", """
+        문제가 발생하면 다음을 확인하세요:
+        1. 모든 파일이 올바른 형식인지
+        2. 메인 파일이 다른 프로그램에서 열려있지 않은지
+        3. 로그 파일에서 오류 메시지 확인
+        """)
+    ]
+    
+    # 도움말 내용 표시
+    for title, content in help_content:
+        # 제목
+        title_label = ctk.CTkLabel(
+            scroll_frame,
+            text=title,
+            font=("맑은 고딕", 14, "bold"),
+            text_color="#333333"
+        )
+        title_label.pack(pady=(20,5), padx=10, anchor="w")
+        
+        # 내용
+        content_label = ctk.CTkLabel(
+            scroll_frame,
+            text=content.strip(),
+            font=("맑은 고딕", 12),
+            text_color="#666666",
+            justify="left",
+            wraplength=550
+        )
+        content_label.pack(pady=(0,10), padx=20, anchor="w")
+    
+    # 닫기 버튼
+    close_btn = ctk.CTkButton(
+        help_window,
+        text="닫기",
+        font=("맑은 고딕", 12, "bold"),
+        fg_color="#4CAF50",
+        hover_color="#388E3C",
+        text_color="white",
+        corner_radius=8,
+        width=100,
+        height=35,
+        command=help_window.destroy
+    )
+    close_btn.pack(pady=10)
+    
+    # 모달 창으로 설정
+    help_window.transient(root)
+    help_window.grab_set()
+    root.wait_window(help_window)
 
 def on_upload_main_file():
     """메인 파일 업로드"""
