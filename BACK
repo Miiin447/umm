@@ -1,14 +1,18 @@
 import os
 import shutil
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import pandas as pd
 from openpyxl import load_workbook
 from openpyxl.utils import range_boundaries, get_column_letter
 import re
 from copy import copy
-from openpyxl.styles import Border, Side
+from openpyxl.styles import Border, Side, PatternFill
 from tkinter import messagebox
+from collections import Counter
+from openpyxl.worksheet.filters import AutoFilter
+import pytz
+from openpyxl.chart import LineChart, Reference
 
 class ExcelBackend:
     def __init__(self):
@@ -164,10 +168,10 @@ class ExcelBackend:
                 patients_df['등록 날짜'] = patients_df['등록 날짜'].apply(self.standardize_date)
                 self.logger.info("등록 날짜 형식 통일 완료")
             
-            table = self.find_table("환자자동", wb)
+            table = self.find_table("회원자동", wb)
             if not table:
-                self.logger.error("환자자동 테이블을 찾을 수 없음")
-                return {"success": False, "msg": "환자자동 테이블 없음"}
+                self.logger.error("회원자동 테이블을 찾을 수 없음")
+                return {"success": False, "msg": "회원자동 테이블 없음"}
             
             patients_sheet = None
             for sheet in wb.worksheets:
@@ -176,8 +180,8 @@ class ExcelBackend:
                     break
             
             if not patients_sheet:
-                self.logger.error("환자자동 테이블이 있는 시트를 찾을 수 없음")
-                return {"success": False, "msg": "환자자동 테이블이 있는 시트를 찾을 수 없음"}
+                self.logger.error("회원자동 테이블이 있는 시트를 찾을 수 없음")
+                return {"success": False, "msg": "회원자동 테이블이 있는 시트를 찾을 수 없음"}
 
             min_col, min_row, max_col, max_row = range_boundaries(table.ref)
             excel_headers = {}
@@ -201,7 +205,7 @@ class ExcelBackend:
             gender_col = excel_headers.get("성별")
 
             # 컬럼 찾기 상세 로깅
-            self.logger.info("\n=== 환자자동 테이블 컬럼 정보 ===")
+            self.logger.info("\n=== 회원자동 테이블 컬럼 정보 ===")
             self.logger.info(f"엑셀 헤더 전체 목록: {excel_headers}")
             self.logger.info(f"이름 열: {name_col} ({col_to_letter.get('이름', '?')})")
             self.logger.info(f"등록 날짜 열: {reg_date_col} ({col_to_letter.get('등록 날짜', '?')})")
@@ -263,7 +267,6 @@ class ExcelBackend:
                                 cell.fill = copy(source_cell.fill)
                                 cell.border = copy(source_cell.border)
                                 cell.alignment = copy(source_cell.alignment)
-                                cell.number_format = source_cell.number_format
                         except Exception as e:
                             self.logger.warning(f"셀 스타일 복사 실패 (행: {max_row}, 열: {col}): {str(e)}")
                 
@@ -503,7 +506,6 @@ class ExcelBackend:
                                 sheet.cell(row=max_row, column=col).fill = copy(source_cell.fill)
                                 sheet.cell(row=max_row, column=col).border = copy(source_cell.border)
                                 sheet.cell(row=max_row, column=col).alignment = copy(source_cell.alignment)
-                                sheet.cell(row=max_row, column=col).number_format = source_cell.number_format
                         except Exception as e:
                             self.logger.warning(f"셀 스타일 복사 실패 (행: {max_row}, 열: {col}): {str(e)}")
                 
@@ -531,11 +533,11 @@ class ExcelBackend:
             wb = load_workbook(main_file)
             self.logger.info(f"메인 파일 로드 완료: {main_file}")
             
-            # 환자자동 테이블 찾기
-            patients_table = self.find_table("환자자동", wb)
+            # 회원자동 테이블 찾기
+            patients_table = self.find_table("회원자동", wb)
             if not patients_table:
-                self.logger.error("환자자동 테이블을 찾을 수 없음")
-                return {"success": False, "msg": "환자자동 테이블 없음"}
+                self.logger.error("회원자동 테이블을 찾을 수 없음")
+                return {"success": False, "msg": "회원자동 테이블 없음"}
             
             # 고객관리자동 테이블 찾기
             customer_table = self.find_table("고객관리자동", wb)
@@ -543,13 +545,13 @@ class ExcelBackend:
                 self.logger.error("고객관리자동 테이블을 찾을 수 없음")
                 return {"success": False, "msg": "고객관리자동 테이블 없음"}
             
-            # 환자자동 시트와 고객관리자동 시트 찾기
+            # 회원자동 시트와 고객관리자동 시트 찾기
             patients_sheet = None
             customer_sheet = None
             for sheet in wb.worksheets:
                 if patients_table in sheet.tables.values():
                     patients_sheet = sheet
-                    self.logger.info(f"환자자동 시트 찾음: {sheet.title}")
+                    self.logger.info(f"회원자동 시트 찾음: {sheet.title}")
                 if customer_table in sheet.tables.values():
                     customer_sheet = sheet
                     self.logger.info(f"고객관리자동 시트 찾음: {sheet.title}")
@@ -558,9 +560,9 @@ class ExcelBackend:
                 self.logger.error("필요한 시트를 찾을 수 없음")
                 return {"success": False, "msg": "필요한 시트를 찾을 수 없음"}
             
-            # 환자자동 테이블 범위
+            # 회원자동 테이블 범위
             p_min_col, p_min_row, p_max_col, p_max_row = range_boundaries(patients_table.ref)
-            self.logger.info(f"환자자동 테이블 범위: {patients_table.ref}")
+            self.logger.info(f"회원자동 테이블 범위: {patients_table.ref}")
             
             # 고객관리자동 테이블 범위
             c_min_col, c_min_row, c_max_col, c_max_row = range_boundaries(customer_table.ref)
@@ -570,12 +572,12 @@ class ExcelBackend:
             patients_headers = {}
             customer_headers = {}
             
-            # 환자자동 헤더
+            # 회원자동 헤더
             for col in range(p_min_col, p_max_col + 1):
                 header = patients_sheet.cell(row=p_min_row, column=col).value
                 if header:
                     patients_headers[header] = col
-                    self.logger.debug(f"환자자동 헤더: {header} -> 열 {col}")
+                    self.logger.debug(f"회원자동 헤더: {header} -> 열 {col}")
             
             # 고객관리자동 헤더
             for col in range(c_min_col, c_max_col + 1):
@@ -584,7 +586,7 @@ class ExcelBackend:
                     customer_headers[header] = col
                     self.logger.debug(f"고객관리자동 헤더: {header} -> 열 {col}")
             
-            self.logger.info(f"환자자동 헤더 목록: {list(patients_headers.keys())}")
+            self.logger.info(f"회원자동 헤더 목록: {list(patients_headers.keys())}")
             self.logger.info(f"고객관리자동 헤더 목록: {list(customer_headers.keys())}")
             
             # 환자 데이터 수집
@@ -677,20 +679,18 @@ class ExcelBackend:
                 empty_rows.remove(c_min_row + 1)  # 첫 번째 행은 보존
             
             # 빈 행 삭제 (역순으로 삭제하여 인덱스 변화 방지)
-            deleted_count = 0
             for row in sorted(empty_rows, reverse=True):
                 customer_sheet.delete_rows(row)
-                deleted_count += 1
-            
+                c_max_row -= 1
+
             # 테이블 범위 업데이트
-            if deleted_count > 0:
-                c_max_row -= deleted_count
+            if updated_count > 0:
                 customer_table.ref = f"{get_column_letter(c_min_col)}{c_min_row}:{get_column_letter(c_max_col)}{c_max_row}"
             
             wb.save(main_file)
-            self.logger.info(f"환자 정보 업데이트 완료: {updated_count}건 업데이트, {deleted_count}건 공란 행 삭제")
+            self.logger.info(f"환자 정보 업데이트 완료: {updated_count}건 업데이트, {len(empty_rows)}건 공란 행 삭제")
             
-            return {"success": True, "msg": f"{updated_count}건의 환자 정보 업데이트 완료, {deleted_count}건의 공란 행 삭제"}
+            return {"success": True, "msg": f"{updated_count}건의 환자 정보 업데이트 완료, {len(empty_rows)}건의 공란 행 삭제"}
             
         except Exception as e:
             self.logger.error(f"환자 정보 업데이트 중 오류 발생: {str(e)}", exc_info=True)
@@ -798,7 +798,7 @@ class ExcelBackend:
             self.logger.warning(f"연령대 계산 중 오류 발생: {age} -> {str(e)}")
             return None
 
-    def run_chart_update(self, main_file):
+    def run_chart_update(self, main_file, selected_year=None, selected_month=None):
         """도표 업데이트 기능 실행"""
         self.logger.info("도표 업데이트 시작")
         self.logger.info(f"메인 파일: {main_file}")
@@ -813,18 +813,25 @@ class ExcelBackend:
             wb = load_workbook(main_file)
             self.logger.info("메인 파일 로드 완료")
             
-            # 현재 달 계산
-            today = datetime.now()
-            current_month = today.month
-            current_year = today.year
-            month_str = str(current_month)
-            self.logger.info(f"현재 달 계산: {current_month}월")
+            # 선택된 연도와 월이 없으면 현재 날짜 사용
+            if selected_year is None or selected_month is None:
+                now = datetime.now()
+                selected_year = now.year
+                selected_month = now.month
+            
+            month_str = str(selected_month)
+            
+            # 디버그 로그 추가
+            self.logger.info(f"\n=== 선택된 날짜 정보 ===")
+            self.logger.info(f"선택된 연도: {selected_year}")
+            self.logger.info(f"선택된 월: {selected_month}")
+            self.logger.info(f"월 문자열: {month_str}")
+            self.logger.info(f"=== 선택된 날짜 정보 끝 ===\n")
             
             # 새로운 시트 이름
             new_patients_sheet_name = f"{month_str}월_회원"
             new_payment_sheet_name = f"{month_str}월_진료"
             self.logger.info(f"새로운 시트 이름: {new_patients_sheet_name}, {new_payment_sheet_name}")
-            
             # 기존 시트 찾기
             existing_patients_sheet = None
             existing_payment_sheet = None
@@ -858,21 +865,23 @@ class ExcelBackend:
             # 시트 이름 변경 후 저장
             wb.save(main_file)
             self.logger.info(f"시트 이름 변경 후 저장 완료: {main_file}")
+
+            # ★★★ 반드시 최근회원/최근진료 테이블 복사(업데이트)부터 실행 ★★★
             # 테이블 찾기
-            patients_table = self.find_table("최근환자", existing_patients_sheet)
+            patients_table = self.find_table("최근회원", existing_patients_sheet)
             payment_table = self.find_table("최근진료", existing_payment_sheet)
             if not patients_table:
-                self.logger.error("최근환자 테이블을 찾을 수 없음")
-                return {"success": False, "msg": "최근환자 테이블을 찾을 수 없습니다."}
+                self.logger.error("최근회원 테이블을 찾을 수 없음")
+                return {"success": False, "msg": "최근회원 테이블을 찾을 수 없습니다."}
             if not payment_table:
                 self.logger.error("최근진료 테이블을 찾을 수 없음")
                 return {"success": False, "msg": "최근진료 테이블을 찾을 수 없습니다."}
-            # 환자자동, 고객관리자동 테이블 찾기
-            auto_patients_table = self.find_table("환자자동", wb)
+            # 회원자동, 고객관리자동 테이블 찾기
+            auto_patients_table = self.find_table("회원자동", wb)
             auto_customers_table = self.find_table("고객관리자동", wb)
             if not auto_patients_table or not auto_customers_table:
-                self.logger.error("환자자동/고객관리자동 테이블을 찾을 수 없음")
-                return {"success": False, "msg": "환자자동/고객관리자동 테이블을 찾을 수 없습니다."}
+                self.logger.error("회원자동/고객관리자동 테이블을 찾을 수 없음")
+                return {"success": False, "msg": "회원자동/고객관리자동 테이블을 찾을 수 없습니다."}
             # 시트 찾기
             auto_patients_sheet = None
             auto_customers_sheet = None
@@ -892,38 +901,74 @@ class ExcelBackend:
             payment_headers = [existing_payment_sheet.cell(row=py_min_row, column=col).value for col in range(py_min_col, py_max_col+1)]
             auto_customers_headers = [auto_customers_sheet.cell(row=ac_min_row, column=col).value for col in range(ac_min_col, ac_max_col+1)]
             # 최근달 데이터만 추출 (등록 날짜/등록날짜 기준)
-            # 환자자동 → 최근환자
+            # 회원자동 → 최근회원
             recent_rows = []
             for row in range(ap_min_row+1, ap_max_row+1):
                 date_val = auto_patients_sheet.cell(row=row, column=auto_patients_headers.index("등록 날짜")+ap_min_col).value
                 if date_val:
-                    # 날짜 파싱
                     try:
                         if "년" in str(date_val) and "월" in str(date_val):
-                            y = int(str(date_val).split("년")[0])
-                            m = int(str(date_val).split("년")[1].split("월")[0].strip())
-                            if y == current_year and m == current_month:
+                            y = int(date_val.split("년")[0])
+                            m = int(date_val.split("년")[1].split("월")[0].strip())
+                            if y == selected_year and m == selected_month:
                                 recent_rows.append(row)
                     except:
                         continue
+            # 최근회원 테이블 업데이트
+            # 테이블 범위 유지
+            p_min_col, p_min_row, p_max_col, p_max_row = range_boundaries(patients_table.ref)
+            # 헤더 아래 첫 번째 행부터 데이터 입력
+            current_row = p_min_row + 1
+            
             # 기존 데이터 삭제 (헤더 제외)
             for row in range(p_min_row+1, p_max_row+1):
                 for col in range(p_min_col, p_max_col+1):
-                    existing_patients_sheet.cell(row=row, column=col).value = None
-            # 붙여넣기
+                    cell = existing_patients_sheet.cell(row=row, column=col)
+                    cell.value = None
+                    # 셀 서식 초기화
+                    cell.font = None
+                    cell.fill = PatternFill(fill_type=None)
+                    cell.border = None
+                    cell.alignment = None
+
+            # 데이터 입력
             for i, src_row in enumerate(recent_rows):
                 for j, header in enumerate(patients_headers):
                     if header in auto_patients_headers:
                         src_col = auto_patients_headers.index(header) + ap_min_col
                         dst_col = p_min_col + j
                         val = auto_patients_sheet.cell(row=src_row, column=src_col).value
-                        existing_patients_sheet.cell(row=p_min_row+1+i, column=dst_col).value = val
-            # 테이블 ref 조정 (최근환자)
-            last_row = p_min_row + len(recent_rows)
+                        existing_patients_sheet.cell(row=current_row+i, column=dst_col).value = val
+            
+            # 테이블 범위 업데이트
+            last_row = current_row + len(recent_rows) - 1
+            if last_row < p_min_row + 1:  # 데이터가 없는 경우
+                last_row = p_min_row + 1  # 최소 1행 유지
             patients_table.ref = f"{get_column_letter(p_min_col)}{p_min_row}:{get_column_letter(p_max_col)}{last_row}"
+            # 테이블 속성 보존
+            patients_table.autoFilter = AutoFilter(ref=f"{get_column_letter(p_min_col)}{p_min_row}:{get_column_letter(p_max_col)}{last_row}")
+            patients_table.displayName = "최근회원"
+            patients_table.name = "최근회원"
 
-            # 고객관리자동 → 최근진료
-            recent_rows2 = []
+            # 최근진료 테이블 업데이트
+            # 테이블 범위 유지
+            py_min_col, py_min_row, py_max_col, py_max_row = range_boundaries(payment_table.ref)
+            # 헤더 아래 첫 번째 행부터 데이터 입력
+            current_row = py_min_row + 1
+            
+            # 기존 데이터 삭제 (헤더 제외)
+            for row in range(py_min_row+1, py_max_row+1):
+                for col in range(py_min_col, py_max_col+1):
+                    cell = existing_payment_sheet.cell(row=row, column=col)
+                    cell.value = None
+                    # 셀 서식 초기화
+                    cell.font = None
+                    cell.fill = PatternFill(fill_type=None)
+                    cell.border = None
+                    cell.alignment = None
+
+            # 고객관리자동 테이블에서 선택한 연도와 월의 데이터만 추출
+            recent_payment_rows = []
             for row in range(ac_min_row+1, ac_max_row+1):
                 date_val = auto_customers_sheet.cell(row=row, column=auto_customers_headers.index("등록날짜")+ac_min_col).value
                 if date_val:
@@ -931,25 +976,140 @@ class ExcelBackend:
                         if "년" in str(date_val) and "월" in str(date_val):
                             y = int(str(date_val).split("년")[0])
                             m = int(str(date_val).split("년")[1].split("월")[0].strip())
-                            if y == current_year and m == current_month:
-                                recent_rows2.append(row)
+                            if y == selected_year and m == selected_month:
+                                recent_payment_rows.append(row)
                     except:
                         continue
-            # 기존 데이터 삭제 (헤더 제외)
-            for row in range(py_min_row+1, py_max_row+1):
-                for col in range(py_min_col, py_max_col+1):
-                    existing_payment_sheet.cell(row=row, column=col).value = None
-            # 붙여넣기
-            for i, src_row in enumerate(recent_rows2):
+            
+            # 데이터 입력
+            for i, src_row in enumerate(recent_payment_rows):
                 for j, header in enumerate(payment_headers):
                     if header in auto_customers_headers:
                         src_col = auto_customers_headers.index(header) + ac_min_col
                         dst_col = py_min_col + j
                         val = auto_customers_sheet.cell(row=src_row, column=src_col).value
-                        existing_payment_sheet.cell(row=py_min_row+1+i, column=dst_col).value = val
-            # 테이블 ref 조정 (최근진료)
-            last_row2 = py_min_row + len(recent_rows2)
-            payment_table.ref = f"{get_column_letter(py_min_col)}{py_min_row}:{get_column_letter(py_max_col)}{last_row2}"
+                        existing_payment_sheet.cell(row=current_row+i, column=dst_col).value = val
+            
+            # 테이블 범위 업데이트
+            last_row = current_row + len(recent_payment_rows) - 1
+            if last_row < py_min_row + 1:  # 데이터가 없는 경우
+                last_row = py_min_row + 1  # 최소 1행 유지
+            payment_table.ref = f"{get_column_letter(py_min_col)}{py_min_row}:{get_column_letter(py_max_col)}{last_row}"
+            # 테이블 속성 보존
+            payment_table.autoFilter = AutoFilter(ref=f"{get_column_letter(py_min_col)}{py_min_row}:{get_column_letter(py_max_col)}{last_row}")
+            payment_table.displayName = "최근진료"
+            payment_table.name = "최근진료"
+
+            # ★★★ 여기서부터 월별회원 테이블 자동 업데이트 및 후처리 진행 ★★★
+            try:
+                summary_sheet = None
+                summary_table = None
+                for sheet in wb.worksheets:
+                    if sheet.title == "월별회원가입지표":
+                        summary_sheet = sheet
+                        break
+                if summary_sheet is None:
+                    self.logger.error("월별회원가입지표 시트를 찾을 수 없음")
+                    return {"success": False, "msg": "월별회원가입지표 시트를 찾을 수 없습니다."}
+                summary_table = self.find_table("월별회원", summary_sheet)
+                if summary_table is None:
+                    self.logger.error("월별회원 테이블을 찾을 수 없음")
+                    return {"success": False, "msg": "월별회원 테이블을 찾을 수 없습니다."}
+                
+                # 회원자동 테이블에서 월별 회원 수 계산
+                ap_min_col, ap_min_row, ap_max_col, ap_max_row = range_boundaries(auto_patients_table.ref)
+                monthly_counts = {}  # {year.month: count}
+                
+                for row in range(ap_min_row+1, ap_max_row+1):
+                    date_val = auto_patients_sheet.cell(row=row, column=auto_patients_headers.index("등록 날짜")+ap_min_col).value
+                    if date_val:
+                        try:
+                            if "년" in str(date_val) and "월" in str(date_val):
+                                y = int(str(date_val).split("년")[0])
+                                m = int(str(date_val).split("년")[1].split("월")[0].strip())
+                                period_key = f"{y}.{m:02d}"
+                                monthly_counts[period_key] = monthly_counts.get(period_key, 0) + 1
+                        except:
+                            continue
+                
+                self.logger.info(f"월별 회원 수 계산 완료: {monthly_counts}")
+                
+                # 테이블 범위 가져오기
+                s_min_col, s_min_row, s_max_col, s_max_row = range_boundaries(summary_table.ref)
+                
+                # 기존 데이터 삭제 (헤더 제외)
+                for row in range(s_min_row+1, s_max_row+1):
+                    for col in range(s_min_col, s_max_col+1):
+                        cell = summary_sheet.cell(row=row, column=col)
+                        cell.value = None
+                        cell.font = None
+                        cell.fill = PatternFill(fill_type=None)
+                        cell.border = None
+                        cell.alignment = None
+
+                # 데이터 입력
+                current_row = s_min_row + 1
+                total_cumulative = 0
+                
+                # 날짜를 연속된 순서로 정렬
+                sorted_periods = sorted(monthly_counts.keys())
+                if len(sorted_periods) > 1:
+                    # 첫 번째 날짜와 선택한 날짜 사이의 모든 월을 생성
+                    start_year, start_month = map(int, sorted_periods[0].split('.'))
+                    
+                    # 연속된 날짜 목록 생성 (선택한 연도와 월까지만)
+                    continuous_periods = []
+                    current_year, current_month = start_year, start_month
+                    while (current_year < selected_year) or (current_year == selected_year and current_month <= selected_month):
+                        period_key = f"{current_year}.{current_month:02d}"
+                        continuous_periods.append(period_key)
+                        
+                        current_month += 1
+                        if current_month > 12:
+                            current_month = 1
+                            current_year += 1
+                    
+                    # 연속된 날짜에 대해 데이터 입력
+                    for period in continuous_periods:
+                        count = monthly_counts.get(period, 0)  # 해당 월의 데이터가 없으면 0
+                        total_cumulative += count
+                        
+                        summary_sheet.cell(row=current_row, column=s_min_col).value = period
+                        summary_sheet.cell(row=current_row, column=s_min_col+1).value = count
+                        summary_sheet.cell(row=current_row, column=s_min_col+2).value = total_cumulative
+                        current_row += 1
+                else:
+                    # 데이터가 하나뿐인 경우
+                    for period in sorted_periods:
+                        year, month = map(int, period.split('.'))
+                        # 선택한 연도와 월 이전의 데이터만 포함
+                        if (year < selected_year) or (year == selected_year and month <= selected_month):
+                            count = monthly_counts[period]
+                            total_cumulative += count
+                            
+                            summary_sheet.cell(row=current_row, column=s_min_col).value = period
+                            summary_sheet.cell(row=current_row, column=s_min_col+1).value = count
+                            summary_sheet.cell(row=current_row, column=s_min_col+2).value = total_cumulative
+                            current_row += 1
+                
+                # 테이블 범위 업데이트
+                last_row = current_row - 1
+                if last_row < s_min_row + 1:  # 데이터가 없는 경우
+                    last_row = s_min_row + 1  # 최소 1행 유지
+                summary_table.ref = f"{get_column_letter(s_min_col)}{s_min_row}:{get_column_letter(s_max_col)}{last_row}"
+                
+                # 테이블 속성 보존
+                summary_table.autoFilter = AutoFilter(ref=f"{get_column_letter(s_min_col)}{s_min_row}:{get_column_letter(s_max_col)}{last_row}")
+                summary_table.displayName = "월별회원"
+                summary_table.name = "월별회원"
+                
+                # --- 차트 관련 코드 전체 삭제 (수동으로 관리할 것이므로) ---
+                # 기존 차트의 디자인 저장, 삭제, 새 차트 생성, 속성 복사, summary_sheet.add_chart 등
+                # chart = LineChart() ... summary_sheet.add_chart(chart, ...) 등 모두 제거
+                # 데이터 집계, summary_table.ref, summary_table.autoFilter 등은 그대로 유지
+            except Exception as e:
+                self.logger.error(f"월별회원 테이블 업데이트 중 오류 발생: {str(e)}")
+                return {"success": False, "msg": f"월별회원 테이블 업데이트 중 오류 발생: {str(e)}"}
 
             # 수식 업데이트 (기존 코드)
             updated_formulas = 0
@@ -967,6 +1127,215 @@ class ExcelBackend:
                             cell.value = formula
             self.logger.info(f"수식 업데이트 완료: {updated_formulas}개의 수식이 업데이트됨")
             wb.save(main_file)
+
+            # --- 여기서부터 30일간회원가입수 시트의 월별가입 테이블 업데이트 추가 ---
+            try:
+                # 1. 30일간회원가입수 시트와 월별가입 테이블 찾기
+                month_join_sheet = None
+                month_join_table = None
+                for sheet in wb.worksheets:
+                    if sheet.title == "30일간회원가입수":
+                        month_join_sheet = sheet
+                        break
+                if month_join_sheet is None:
+                    self.logger.error("30일간회원가입수 시트를 찾을 수 없음")
+                    # 이 기능만 실패해도 전체 실패로 만들지 않고 넘어감
+                else:
+                    # 시트 내의 모든 텍스트를 최근 달로 업데이트
+                    for row in month_join_sheet.iter_rows():
+                        for cell in row:
+                            if cell.value and isinstance(cell.value, str):
+                                # "X월 일별 회원 가입자 수 추이" 패턴 찾기
+                                if "월 일별 회원 가입자 수 추이" in cell.value:
+                                    old_value = cell.value
+                                    new_value = f"{selected_month}월 일별 회원 가입자 수 추이"
+                                    
+                                    # 이전 값과 새로운 값이 다른 경우에만 업데이트
+                                    if old_value != new_value:
+                                        cell.value = new_value
+                                        self.logger.info(f"\n=== 텍스트 업데이트 상세 ===")
+                                        self.logger.info(f"셀 위치: {cell.coordinate}")
+                                        self.logger.info(f"이전 값: {old_value}")
+                                        self.logger.info(f"새로운 값: {new_value}")
+                                        self.logger.info(f"현재 달: {selected_month}월")
+                                        self.logger.info(f"=== 텍스트 업데이트 끝 ===\n")
+                                    else:
+                                        self.logger.info(f"\n=== 텍스트 업데이트 불필요 ===")
+                                        self.logger.info(f"셀 위치: {cell.coordinate}")
+                                        self.logger.info(f"현재 값: {old_value}")
+                                        self.logger.info(f"현재 달: {selected_month}월")
+                                        self.logger.info(f"이미 올바른 달로 설정되어 있음")
+                                        self.logger.info(f"=== 텍스트 업데이트 불필요 끝 ===\n")
+
+                    month_join_table = self.find_table("월별가입", month_join_sheet)
+                    if month_join_table is None:
+                        self.logger.error("월별가입 테이블을 찾을 수 없음")
+                    else:
+                        # 기존 데이터 삭제 (헤더 제외, 최소 1개 공란 행 남김)
+                        mj_min_col, mj_min_row, mj_max_col, mj_max_row = range_boundaries(month_join_table.ref)
+                        data_row_start = mj_min_row + 1
+                        # 공란 행 확보 (최소 1행)
+                        if mj_max_row <= mj_min_row + 1:
+                            mj_max_row = mj_min_row + 1
+                        # 헤더 아래 모든 행을 공란으로 초기화
+                        for row in range(data_row_start, mj_max_row + 1):
+                            for col in range(mj_min_col, mj_max_col + 1):
+                                cell = month_join_sheet.cell(row=row, column=col)
+                                cell.value = None
+                                # 셀 서식 초기화
+                                cell.font = None
+                                cell.fill = PatternFill(fill_type=None)
+                                cell.border = None
+                                cell.alignment = None
+
+                        # 회원자동 테이블에서 이번 달 데이터만 일자별로 집계
+                        date_counter = Counter()
+                        for row in range(ap_min_row+1, ap_max_row+1):
+                            date_val = auto_patients_sheet.cell(row=row, column=auto_patients_headers.index("등록 날짜")+ap_min_col).value
+                            if date_val:
+                                try:
+                                    if isinstance(date_val, str) and "년" in date_val and "월" in date_val and "일" in date_val:
+                                        y = int(date_val.split("년")[0])
+                                        m = int(date_val.split("년")[1].split("월")[0].strip())
+                                        d = int(date_val.split("월")[1].split("일")[0].strip())
+                                        if y == selected_year and m == selected_month:
+                                            date_str = f"{y}-{m:02d}-{d:02d}"
+                                            date_counter[date_str] += 1
+                                except Exception as e:
+                                    self.logger.warning(f"날짜 파싱 실패: {date_val} -> {str(e)}")
+                                    continue
+                        
+                        # 일자 오름차순 정렬
+                        sorted_dates = sorted(date_counter.items())
+                        self.logger.info(f"이번 달 일별 회원 가입 수: {sorted_dates}")
+                        
+                        # 데이터 입력 (공란 행 포함, 데이터가 있으면 덮어씀)
+                        for i, (date_str, cnt) in enumerate(sorted_dates):
+                            month_join_sheet.cell(row=data_row_start + i, column=mj_min_col).value = date_str
+                            month_join_sheet.cell(row=data_row_start + i, column=mj_min_col + 1).value = cnt
+                        
+                        # 데이터가 없으면 공란 행만 남김
+                        total_rows = max(len(sorted_dates), 1)
+                        new_last_row = data_row_start + total_rows - 1
+                        month_join_table.ref = f"{get_column_letter(mj_min_col)}{mj_min_row}:{get_column_letter(mj_max_col)}{new_last_row}"
+                        # 테이블 속성 보존
+                        month_join_table.autoFilter = AutoFilter(ref=f"{get_column_letter(mj_min_col)}{mj_min_row}:{get_column_letter(mj_max_col)}{new_last_row}")
+                        month_join_table.displayName = "월별가입"
+                        month_join_table.name = "월별가입"
+                        wb.save(main_file)
+                        self.logger.info(f"30일간회원가입수 시트 업데이트 완료: {len(sorted_dates)}일의 데이터 입력")
+            except Exception as e:
+                self.logger.error(f"30일간회원가입수 월별가입 테이블 자동 업데이트 중 오류: {str(e)}")
+
+            # --- 여기서부터 월별진료지표 시트의 월별진료 테이블 업데이트 추가 ---
+            try:
+                # 1. 월별진료지표 시트와 월별진료 테이블 찾기
+                treatment_sheet = None
+                treatment_table = None
+                for sheet in wb.worksheets:
+                    if sheet.title == "월별진료지표":
+                        treatment_sheet = sheet
+                        break
+                if treatment_sheet is None:
+                    self.logger.error("월별진료지표 시트를 찾을 수 없음")
+                    # 이 기능만 실패해도 전체 실패로 만들지 않고 넘어감
+                else:
+                    treatment_table = self.find_table("월별진료", treatment_sheet)
+                    if treatment_table is None:
+                        self.logger.error("월별진료 테이블을 찾을 수 없음")
+                    else:
+                        # 고객관리자동 테이블에서 월별 진료 수 계산
+                        ac_min_col, ac_min_row, ac_max_col, ac_max_row = range_boundaries(auto_customers_table.ref)
+                        monthly_treatment_counts = {}  # {year.month: count}
+                        
+                        for row in range(ac_min_row+1, ac_max_row+1):
+                            date_val = auto_customers_sheet.cell(row=row, column=auto_customers_headers.index("등록날짜")+ac_min_col).value
+                            if date_val:
+                                try:
+                                    if "년" in str(date_val) and "월" in str(date_val):
+                                        y = int(str(date_val).split("년")[0])
+                                        m = int(str(date_val).split("년")[1].split("월")[0].strip())
+                                        period_key = f"{y}.{m:02d}"
+                                        monthly_treatment_counts[period_key] = monthly_treatment_counts.get(period_key, 0) + 1
+                                except:
+                                    continue
+                        
+                        self.logger.info(f"월별 진료 수 계산 완료: {monthly_treatment_counts}")
+                        
+                        # 테이블 범위 가져오기
+                        t_min_col, t_min_row, t_max_col, t_max_row = range_boundaries(treatment_table.ref)
+                        
+                        # 기존 데이터 삭제 (헤더 제외)
+                        for row in range(t_min_row+1, t_max_row+1):
+                            for col in range(t_min_col, t_max_col+1):
+                                cell = treatment_sheet.cell(row=row, column=col)
+                                cell.value = None
+                                cell.font = None
+                                cell.fill = PatternFill(fill_type=None)
+                                cell.border = None
+                                cell.alignment = None
+
+                        # 데이터 입력
+                        current_row = t_min_row + 1
+                        total_cumulative = 0
+                        
+                        # 날짜를 연속된 순서로 정렬
+                        sorted_periods = sorted(monthly_treatment_counts.keys())
+                        if len(sorted_periods) > 1:
+                            # 첫 번째 날짜와 선택한 날짜 사이의 모든 월을 생성
+                            start_year, start_month = map(int, sorted_periods[0].split('.'))
+                            
+                            # 연속된 날짜 목록 생성 (선택한 연도와 월까지만)
+                            continuous_periods = []
+                            current_year, current_month = start_year, start_month
+                            while (current_year < selected_year) or (current_year == selected_year and current_month <= selected_month):
+                                period_key = f"{current_year}.{current_month:02d}"
+                                continuous_periods.append(period_key)
+                                
+                                current_month += 1
+                                if current_month > 12:
+                                    current_month = 1
+                                    current_year += 1
+                            
+                            # 연속된 날짜에 대해 데이터 입력
+                            for period in continuous_periods:
+                                count = monthly_treatment_counts.get(period, 0)  # 해당 월의 데이터가 없으면 0
+                                total_cumulative += count
+                                
+                                treatment_sheet.cell(row=current_row, column=t_min_col).value = period
+                                treatment_sheet.cell(row=current_row, column=t_min_col+1).value = count
+                                treatment_sheet.cell(row=current_row, column=t_min_col+2).value = total_cumulative
+                                current_row += 1
+                        else:
+                            # 데이터가 하나뿐인 경우
+                            for period in sorted_periods:
+                                year, month = map(int, period.split('.'))
+                                # 선택한 연도와 월 이전의 데이터만 포함
+                                if (year < selected_year) or (year == selected_year and month <= selected_month):
+                                    count = monthly_treatment_counts[period]
+                                    total_cumulative += count
+                                    
+                                    treatment_sheet.cell(row=current_row, column=t_min_col).value = period
+                                    treatment_sheet.cell(row=current_row, column=t_min_col+1).value = count
+                                    treatment_sheet.cell(row=current_row, column=t_min_col+2).value = total_cumulative
+                                    current_row += 1
+                        
+                        # 테이블 범위 업데이트
+                        last_row = current_row - 1
+                        if last_row < t_min_row + 1:  # 데이터가 없는 경우
+                            last_row = t_min_row + 1  # 최소 1행 유지
+                        treatment_table.ref = f"{get_column_letter(t_min_col)}{t_min_row}:{get_column_letter(t_max_col)}{last_row}"
+                        
+                        # 테이블 속성 보존
+                        treatment_table.autoFilter = AutoFilter(ref=f"{get_column_letter(t_min_col)}{t_min_row}:{get_column_letter(t_max_col)}{last_row}")
+                        treatment_table.displayName = "월별진료"
+                        treatment_table.name = "월별진료"
+                        
+                        wb.save(main_file)
+                        self.logger.info(f"월별진료지표 시트 업데이트 완료: {len(continuous_periods) if len(sorted_periods) > 1 else len(sorted_periods)}개월의 데이터 입력")
+            except Exception as e:
+                self.logger.error(f"월별진료지표 월별진료 테이블 자동 업데이트 중 오류: {str(e)}")
+
             return {
                 "success": True,
                 "msg": "도표 업데이트가 완료되었습니다.",
