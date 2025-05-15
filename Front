@@ -126,23 +126,36 @@ def on_upload_main_file():
         defaultextension=".xlsx"
     )
     if file_path:
-        UPLOADED_FILES["main"] = file_path
-        main_file_name = os.path.basename(file_path)
-        logger.info(f"메인 파일 업로드 완료: {main_file_name}")
-        
-        # 파일 정보 업데이트
-        update_file_labels()
-        
-        # 백업 생성
         try:
-            backup_dir = "BACK UP"
-            os.makedirs(backup_dir, exist_ok=True)
-            backup_file = os.path.join(backup_dir, f"BACKUP_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{main_file_name}")
-            shutil.copy2(file_path, backup_file)
-            logger.info(f"메인 파일 백업 생성 완료: {backup_file}")
+            # 파일이 다른 프로그램에서 열려있는지 확인
+            if not check_file_access(file_path):
+                logger.error(f"파일이 다른 프로그램에서 열려있음: {file_path}")
+                messagebox.showerror("오류", f"파일이 다른 프로그램에서 열려있습니다.\n파일을 닫고 다시 시도해주세요: {file_path}")
+                return
+                
+            UPLOADED_FILES["main"] = file_path
+            main_file_name = os.path.basename(file_path)
+            logger.info(f"메인 파일 업로드 완료: {main_file_name}")
+            
+            # 파일 정보 업데이트
+            update_file_labels()
+            
+            # 백업 생성
+            try:
+                backup_dir = os.path.join(os.path.dirname(file_path), "BACK UP")
+                os.makedirs(backup_dir, exist_ok=True)
+                backup_file = os.path.join(backup_dir, f"BACKUP_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{main_file_name}")
+                shutil.copy2(file_path, backup_file)
+                logger.info(f"메인 파일 백업 생성 완료: {backup_file}")
+                messagebox.showinfo("백업 완료", f"메인 파일이 백업되었습니다.\n위치: {backup_file}")
+            except Exception as e:
+                logger.error(f"백업 생성 중 오류 발생: {str(e)}")
+                messagebox.showwarning("백업 실패", f"파일 백업 중 오류가 발생했습니다: {str(e)}")
         except Exception as e:
-            logger.error(f"백업 생성 중 오류 발생: {str(e)}")
-            print(f"백업 생성 중 오류 발생: {str(e)}")
+            logger.error(f"파일 업로드 중 오류 발생: {str(e)}")
+            messagebox.showerror("오류", f"파일 업로드 중 오류가 발생했습니다: {str(e)}")
+            UPLOADED_FILES["main"] = None
+            update_file_labels()
 
 def on_upload_patients_file():
     """환자 파일 업로드"""
@@ -336,37 +349,98 @@ def on_chart_update():
         messagebox.showerror("오류", "메인 파일이 다른 프로그램에서 열려있습니다.\n파일을 닫고 다시 시도해주세요.")
         return
     
-    # UI 상태 업데이트
-    update_center_image("WORKING")
-    root.update()  # UI 즉시 업데이트
+    # 달 선택 다이얼로그 생성
+    month_dialog = ctk.CTkToplevel(root)
+    month_dialog.title("달 선택")
+    month_dialog.geometry("300x200")
+    month_dialog.resizable(False, False)
     
-    try:
-        # 백엔드 도표 업데이트 작업 실행
-        logger.info("백엔드 도표 업데이트 작업 시작")
-        result = processor.run_chart_update(main_file=UPLOADED_FILES["main"])
-        
-        if result["success"]:
-            logger.info("도표 업데이트 성공")
-            messagebox.showinfo("성공", result["msg"])
+    # 현재 연도와 월 가져오기
+    current_year = datetime.now().year
+    current_month = datetime.now().month
+    
+    # 연도 선택
+    year_frame = ctk.CTkFrame(month_dialog)
+    year_frame.pack(pady=10)
+    ctk.CTkLabel(year_frame, text="연도:").pack(side="left", padx=5)
+    year_var = ctk.StringVar(value=str(current_year))
+    year_entry = ctk.CTkEntry(year_frame, width=60, textvariable=year_var)
+    year_entry.pack(side="left", padx=5)
+    
+    # 월 선택
+    month_frame = ctk.CTkFrame(month_dialog)
+    month_frame.pack(pady=10)
+    ctk.CTkLabel(month_frame, text="월:").pack(side="left", padx=5)
+    month_var = ctk.StringVar(value=str(current_month))
+    month_combobox = ctk.CTkComboBox(month_frame, 
+                                   values=[str(i) for i in range(1, 13)],
+                                   width=60,
+                                   variable=month_var)
+    month_combobox.pack(side="left", padx=5)
+    
+    def on_confirm():
+        try:
+            selected_year = int(year_var.get())
+            selected_month = int(month_var.get())
             
-            # 엑셀 파일 열어볼지 물어보기
-            if messagebox.askyesno("완료", "도표 업데이트가 완료되었습니다.\n엑셀 파일을 열어보시겠습니까?"):
-                try:
-                    os.startfile(UPLOADED_FILES["main"])
-                except Exception as e:
-                    logger.error(f"엑셀 파일 열기 실패: {str(e)}")
-                    messagebox.showerror("오류", "엑셀 파일을 열 수 없습니다.")
-        else:
-            logger.error(f"도표 업데이트 실패: {result['msg']}")
-            messagebox.showerror("오류", result["msg"])
+            if not (1 <= selected_month <= 12):
+                messagebox.showerror("오류", "올바른 월을 선택해주세요 (1-12)")
+                return
+                
+            if selected_year < 2000 or selected_year > 2100:
+                messagebox.showerror("오류", "올바른 연도를 입력해주세요 (2000-2100)")
+                return
+            
+            month_dialog.destroy()
+            
+            # UI 상태 업데이트
+            update_center_image("WORKING")
+            root.update()  # UI 즉시 업데이트
+            
+            try:
+                # 백엔드 도표 업데이트 작업 실행
+                logger.info("백엔드 도표 업데이트 작업 시작")
+                result = processor.run_chart_update(
+                    main_file=UPLOADED_FILES["main"],
+                    selected_year=selected_year,
+                    selected_month=selected_month
+                )
+                
+                if result["success"]:
+                    logger.info("도표 업데이트 성공")
+                    messagebox.showinfo("성공", result["msg"])
+                    
+                    # 엑셀 파일 열어볼지 물어보기
+                    if messagebox.askyesno("완료", "도표 업데이트가 완료되었습니다.\n엑셀 파일을 열어보시겠습니까?"):
+                        try:
+                            os.startfile(UPLOADED_FILES["main"])
+                        except Exception as e:
+                            logger.error(f"엑셀 파일 열기 실패: {str(e)}")
+                            messagebox.showerror("오류", "엑셀 파일을 열 수 없습니다.")
+                else:
+                    logger.error(f"도표 업데이트 실패: {result['msg']}")
+                    messagebox.showerror("오류", result["msg"])
+            
+            except Exception as e:
+                logger.error(f"도표 업데이트 중 오류 발생: {str(e)}")
+                messagebox.showerror("오류", f"도표 업데이트 중 오류가 발생했습니다: {str(e)}")
+            
+            finally:
+                # UI 상태 복원
+                update_center_image("READY")
+                
+        except ValueError:
+            messagebox.showerror("오류", "올바른 숫자를 입력해주세요")
     
-    except Exception as e:
-        logger.error(f"도표 업데이트 중 오류 발생: {str(e)}")
-        messagebox.showerror("오류", f"도표 업데이트 중 오류가 발생했습니다: {str(e)}")
+    # 확인 버튼
+    ctk.CTkButton(month_dialog, 
+                 text="확인",
+                 command=on_confirm).pack(pady=20)
     
-    finally:
-        # UI 상태 복원
-        update_center_image("READY")
+    # 다이얼로그를 모달로 설정
+    month_dialog.transient(root)
+    month_dialog.grab_set()
+    root.wait_window(month_dialog)
 
 def toggle_logging():
     """로그 기록 토글"""
