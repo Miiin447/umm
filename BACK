@@ -369,19 +369,73 @@ class ExcelBackend:
                 '의료인 이름': '진단 의사명'
             }
             
-            df = df.rename(columns=column_mapping)
+            self.logger.info(f"매핑 전 컬럼 목록: {df.columns.tolist()}")
             
-            # 날짜 데이터 전처리
-            if '등록날짜' in df.columns:
-                # 원본 날짜 데이터를 datetime으로 변환
-                df['원본_날짜'] = pd.to_datetime(df['등록날짜'], errors='coerce')
-                # 표시용 날짜 형식으로 변환 (시간 포함)
-                df['등록날짜'] = df['원본_날짜'].apply(
-                    lambda x: x.strftime('%Y년 %m월 %d일 %H:%M:%S') if pd.notnull(x) else None
-                )
-            else:
-                self.logger.error("날짜 컬럼을 찾을 수 없음")
-                return {"success": False, "msg": "날짜 컬럼을 찾을 수 없음"}
+            # 날짜 데이터 전처리 (매핑 전에 처리)
+            if '날짜' in df.columns:
+                self.logger.info("날짜 컬럼 처리 시작")
+                try:
+                    # 영어 형식의 날짜를 파싱하는 함수
+                    def parse_english_date(date_str):
+                        try:
+                            # 영어 형식의 날짜를 datetime으로 변환
+                            date_obj = pd.to_datetime(date_str, format='%B %d%S %Y, %I:%M:%S %p')
+                            return date_obj
+                        except:
+                            try:
+                                # 다른 형식 시도
+                                date_obj = pd.to_datetime(date_str)
+                                return date_obj
+                            except:
+                                self.logger.warning(f"날짜 파싱 실패: {date_str}")
+                                return None
+
+                    # 원본 날짜 데이터를 datetime으로 변환
+                    df['원본_날짜'] = df['날짜'].apply(parse_english_date)
+                    
+                    # 날짜가 없는 행 확인
+                    null_dates = df['원본_날짜'].isnull()
+                    if null_dates.any():
+                        self.logger.warning(f"날짜가 없는 행 수: {null_dates.sum()}")
+                        # 날짜가 없는 행의 원본 데이터 로깅
+                        for idx in df[null_dates].index:
+                            self.logger.warning(f"행 {idx + 2}의 원본 날짜 데이터: {df.loc[idx, '날짜']}")
+                    
+                    # 표시용 날짜 형식으로 변환 (시간 포함)
+                    df['날짜'] = df['원본_날짜'].apply(
+                        lambda x: x.strftime('%Y년 %m월 %d일 %H:%M:%S') if pd.notnull(x) else None
+                    )
+                    
+                    # 날짜 컬럼이 비어있는 행 제거
+                    df = df.dropna(subset=['날짜'])
+                    self.logger.info(f"날짜가 있는 행만 유지: {len(df)}행")
+                    
+                    self.logger.info("날짜 컬럼 처리 완료")
+                except Exception as e:
+                    self.logger.error(f"날짜 처리 중 오류 발생: {str(e)}")
+                    return {"success": False, "msg": "날짜 처리 중 오류 발생"}
+            
+            # 컬럼 매핑 적용
+            df = df.rename(columns=column_mapping)
+            self.logger.info(f"매핑 후 컬럼 목록: {df.columns.tolist()}")
+            
+            # 데이터 검증
+            required_columns = ['등록날짜', '환자 명', '진단 의사명']
+            missing_columns = [col for col in required_columns if col not in df.columns]
+            if missing_columns:
+                self.logger.error(f"필수 컬럼이 없음: {missing_columns}")
+                return {"success": False, "msg": f"필수 컬럼이 없음: {missing_columns}"}
+            
+            # 필수 데이터가 있는지 확인
+            missing_data = df[required_columns].isnull().any(axis=1)
+            if missing_data.any():
+                self.logger.warning(f"필수 데이터가 누락된 행 수: {missing_data.sum()}")
+                for idx in df[missing_data].index:
+                    missing_fields = [col for col in required_columns if pd.isnull(df.loc[idx, col])]
+                    self.logger.warning(f"행 {idx + 2}의 누락된 필드: {missing_fields}")
+                # 필수 데이터가 없는 행 제거
+                df = df.dropna(subset=required_columns)
+                self.logger.info(f"필수 데이터가 있는 행만 유지: {len(df)}행")
             
             # 환자명과 의사명 정규화
             for col in ['환자 명', '진단 의사명']:
@@ -398,25 +452,50 @@ class ExcelBackend:
                     refund_amount = abs(refund_row['양'])
                     refund_date = refund_row['원본_날짜']
                     
+                    if pd.isnull(refund_date):
+                        self.logger.warning(f"환불 거래의 날짜가 없음: {refund_row['환자 명']} - {refund_amount}원")
+                        df = df.drop(refund_row.name)
+                        continue
+                    
                     # 같은 환자, 같은 의사, 같은 금액의 양수 거래 찾기
                     matching_rows = df[
                         (df['환자 명'] == refund_row['환자 명']) &
                         (df['진단 의사명'] == refund_row['진단 의사명']) &
-                        (df['양'] == refund_amount)
-                    ]
+                        (df['양'] == refund_amount) &
+                        (df['원본_날짜'].notna())
+                    ].copy()
                     
                     if not matching_rows.empty:
-                        # 날짜 차이 계산
-                        matching_rows['날짜_차이'] = abs(matching_rows['원본_날짜'] - refund_date)
-                        # 가장 가까운 날짜의 거래 선택
-                        closest_row = matching_rows.loc[matching_rows['날짜_차이'].idxmin()]
-                        
-                        # 매칭되는 행 제외
-                        df = df.drop(closest_row.name)
-                        self.logger.info(f"환불 처리: {refund_row['환자 명']} - {refund_amount}원 (날짜 차이: {closest_row['날짜_차이'].days}일)")
+                        try:
+                            # 날짜 차이 계산
+                            matching_rows['날짜_차이'] = abs(matching_rows['원본_날짜'] - refund_date)
+                            
+                            # 날짜 차이가 있는 행만 필터링
+                            valid_matches = matching_rows[matching_rows['날짜_차이'].notna()]
+                            
+                            if not valid_matches.empty:
+                                # 가장 가까운 날짜의 거래 선택
+                                closest_row = valid_matches.loc[valid_matches['날짜_차이'].idxmin()]
+                                
+                                # 매칭되는 행 제외
+                                df = df.drop(closest_row.name)
+                                self.logger.info(f"환불 처리: {refund_row['환자 명']} - {refund_amount}원 (날짜 차이: {closest_row['날짜_차이'].days}일)")
+                            else:
+                                self.logger.warning(f"유효한 날짜 차이가 있는 매칭 거래를 찾을 수 없음: {refund_row['환자 명']} - {refund_amount}원")
+                                df = df.drop(refund_row.name)
+                        except Exception as e:
+                            self.logger.warning(f"환불 매칭 처리 중 오류 발생: {str(e)}")
+                            df = df.drop(refund_row.name)
+                    else:
+                        self.logger.warning(f"환불에 매칭되는 거래를 찾을 수 없음: {refund_row['환자 명']} - {refund_amount}원")
+                        df = df.drop(refund_row.name)
             
             # 원본 날짜 컬럼 삭제
             df = df.drop('원본_날짜', axis=1)
+            
+            # 데이터 처리 전 컬럼 확인
+            self.logger.info(f"최종 컬럼 목록: {df.columns.tolist()}")
+            self.logger.info(f"첫 번째 행 데이터: {df.iloc[0].to_dict() if not df.empty else '데이터 없음'}")
             
             table = self.find_table("고객관리자동", wb)
             if not table:
@@ -482,8 +561,17 @@ class ExcelBackend:
                 date = self.standardize_date(row.get('등록날짜', '')) if '등록날짜' in df.columns else None
                 doctor = self.standardize_value(row.get('진단 의사명', ''), preserve_format=True) if '진단 의사명' in df.columns else None
                 
-                if not name or not date or not doctor:
-                    self.logger.warning(f"필수 데이터 누락: 행 {idx + 2}")
+                # 필수 데이터 검증
+                missing_fields = []
+                if not name:
+                    missing_fields.append('환자 명')
+                if not date:
+                    missing_fields.append('등록날짜')
+                if not doctor:
+                    missing_fields.append('진단 의사명')
+                
+                if missing_fields:
+                    self.logger.warning(f"필수 데이터 누락 (행 {idx + 2}): {', '.join(missing_fields)}")
                     skipped_count += 1
                     continue
                 
