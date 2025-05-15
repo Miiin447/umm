@@ -881,7 +881,7 @@ class ExcelBackend:
             elif age < 70:
                 return "60s"
             else:
-                return "70+"
+                return "70s+"
         except Exception as e:
             self.logger.warning(f"연령대 계산 중 오류 발생: {age} -> {str(e)}")
             return None
