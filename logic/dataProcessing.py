@@ -10,7 +10,7 @@ from copy import copy
 from openpyxl.styles import Border, Side
 from tkinter import messagebox
 
-class ExcelBackend:
+class DataProcessing:
     def __init__(self):
         # 로거 설정
         self.logger = logging.getLogger("ExcelBackend")
@@ -979,8 +979,3 @@ class ExcelBackend:
         except Exception as e:
             self.logger.error(f"도표 업데이트 중 오류 발생: {str(e)}")
             return {"success": False, "msg": f"도표 업데이트 중 오류가 발생했습니다: {str(e)}"}
-
-if __name__ == "__main__":
-    backend = ExcelBackend()
-    result = backend.run_table_update("회원-sales.xlsx", "Patients.csv", "PaymentItems.csv")
-    print(result) 

@@ -1,0 +1,4 @@
+2025-05-15 17:14:12,178 - ExcelBackend - INFO - ExcelBackend 초기화 완료
+2025-05-15 17:14:12,178 - ExcelBackend - INFO - 테이블 업데이트 작업 시작
+2025-05-15 17:14:12,178 - ExcelBackend - ERROR - 메인 파일이 존재하지 않습니다: 회원-sales.xlsx
+2025-05-15 17:28:28,808 - ExcelBackend - INFO - ExcelBackend 초기화 완료
