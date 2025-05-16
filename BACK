@@ -150,6 +150,31 @@ class ExcelBackend:
             patients_df = pd.read_csv(patients_file)
             self.logger.debug(f"CSV 파일 로드 완료: {len(patients_df)} 행")
             self.logger.debug(f"CSV 컬럼 목록: {patients_df.columns.tolist()}")
+
+            # === 한글/영문 헤더 매핑 ===
+            header_mapping = {
+                "Date of registration": "등록 날짜",
+                "Name": "이름",
+                "Phone number": "전화번호",
+                "Date of birth": "생년월일",
+                "Gender": "성별",
+                "Email": "이메일",
+                "Patient type": "환자 유형",
+                "Policy": "정책",
+                "Marketing": "마케팅",
+                "Address": "주소",
+                "Address 2": "주소2",
+                "City": "도시",
+                "State": "현재 있는 주",
+                "Zip code": "우편번호",
+                # 필요시 추가
+            }
+            # 영문 헤더가 있으면 한글로 변환
+            rename_dict = {col: header_mapping[col] for col in patients_df.columns if col in header_mapping}
+            if rename_dict:
+                self.logger.info(f"헤더 영→한 변환: {rename_dict}")
+                patients_df.rename(columns=rename_dict, inplace=True)
+                self.logger.info(f"헤더 변환 후 컬럼: {patients_df.columns.tolist()}")
             
             # 제외된 행 수 카운트
             excluded_count = 0
@@ -364,60 +389,60 @@ class ExcelBackend:
             
             # 필요한 컬럼만 매핑
             column_mapping = {
-                '날짜': '등록날짜',
+                # 영문 → 한글 매핑
+                'Date': '날짜',
+                'Doctor id': '의료인 ID',
+                'Doctor name': '진단 의사명',
+                'Amount': '양',
+                'For doctor': '의사용',
+                'Currency': '통화',
+                'Voucher': '바우처',
+                'Patient': '환자 명',
+                'Description': '설명',
+                # 기존 한글 매핑도 유지
+                '날짜': '등록날짜',  # 기존 코드와 호환
                 '환자': '환자 명',
-                '의료인 이름': '진단 의사명'
+                '의료인 이름': '진단 의사명',
             }
-            
-            self.logger.info(f"매핑 전 컬럼 목록: {df.columns.tolist()}")
-            
-            # 날짜 데이터 전처리 (매핑 전에 처리)
+            # 영문 헤더가 있으면 한글로 변환
+            rename_dict = {col: column_mapping[col] for col in df.columns if col in column_mapping}
+            if rename_dict:
+                self.logger.info(f"결제파일 헤더 영→한 변환: {rename_dict}")
+                df.rename(columns=rename_dict, inplace=True)
+                self.logger.info(f"헤더 변환 후 컬럼: {df.columns.tolist()}")
+            # '날짜' 컬럼이 있으면 '등록날짜'로 한 번 더 변환
             if '날짜' in df.columns:
-                self.logger.info("날짜 컬럼 처리 시작")
-                try:
-                    # 영어 형식의 날짜를 파싱하는 함수
-                    def parse_english_date(date_str):
-                        try:
-                            # 영어 형식의 날짜를 datetime으로 변환
-                            date_obj = pd.to_datetime(date_str, format='%B %d%S %Y, %I:%M:%S %p')
-                            return date_obj
-                        except:
-                            try:
-                                # 다른 형식 시도
-                                date_obj = pd.to_datetime(date_str)
-                                return date_obj
-                            except:
-                                self.logger.warning(f"날짜 파싱 실패: {date_str}")
-                                return None
+                df.rename(columns={'날짜': '등록날짜'}, inplace=True)
+                self.logger.info(f"'날짜' → '등록날짜' 컬럼명 변환 적용: {df.columns.tolist()}")
 
-                    # 원본 날짜 데이터를 datetime으로 변환
-                    df['원본_날짜'] = df['날짜'].apply(parse_english_date)
-                    
-                    # 날짜가 없는 행 확인
-                    null_dates = df['원본_날짜'].isnull()
-                    if null_dates.any():
-                        self.logger.warning(f"날짜가 없는 행 수: {null_dates.sum()}")
-                        # 날짜가 없는 행의 원본 데이터 로깅
-                        for idx in df[null_dates].index:
-                            self.logger.warning(f"행 {idx + 2}의 원본 날짜 데이터: {df.loc[idx, '날짜']}")
-                    
-                    # 표시용 날짜 형식으로 변환 (시간 포함)
-                    df['날짜'] = df['원본_날짜'].apply(
-                        lambda x: x.strftime('%Y년 %m월 %d일 %H:%M:%S') if pd.notnull(x) else None
-                    )
-                    
-                    # 날짜 컬럼이 비어있는 행 제거
-                    df = df.dropna(subset=['날짜'])
-                    self.logger.info(f"날짜가 있는 행만 유지: {len(df)}행")
-                    
-                    self.logger.info("날짜 컬럼 처리 완료")
-                except Exception as e:
-                    self.logger.error(f"날짜 처리 중 오류 발생: {str(e)}")
-                    return {"success": False, "msg": "날짜 처리 중 오류 발생"}
-            
-            # 컬럼 매핑 적용
-            df = df.rename(columns=column_mapping)
-            self.logger.info(f"매핑 후 컬럼 목록: {df.columns.tolist()}")
+            # 날짜 데이터 전처리 (매핑 후, '등록날짜' 또는 '날짜' 기준)
+            date_col = None
+            if '등록날짜' in df.columns:
+                date_col = '등록날짜'
+            elif '날짜' in df.columns:
+                date_col = '날짜'
+            if date_col:
+                self.logger.info(f"날짜 파싱 기준 컬럼: {date_col}")
+                def parse_english_date(date_str):
+                    try:
+                        return pd.to_datetime(date_str)
+                    except Exception:
+                        return None
+                df['원본_날짜'] = df[date_col].apply(parse_english_date)
+                # 날짜가 없는 행 확인
+                null_dates = df['원본_날짜'].isnull()
+                if null_dates.any():
+                    self.logger.warning(f"날짜가 없는 행 수: {null_dates.sum()}")
+                    for idx in df[null_dates].index:
+                        self.logger.warning(f"행 {idx + 2}의 원본 날짜 데이터: {df.loc[idx, date_col]}")
+                # 표시용 날짜 형식으로 변환 (시간 포함)
+                df[date_col] = df['원본_날짜'].apply(
+                    lambda x: x.strftime('%Y년 %m월 %d일 %H:%M:%S') if pd.notnull(x) else None
+                )
+                # 날짜 컬럼이 비어있는 행 제거
+                df = df.dropna(subset=[date_col])
+                self.logger.info(f"날짜가 있는 행만 유지: {len(df)}행")
+                self.logger.info("날짜 컬럼 처리 완료")
             
             # 데이터 검증
             required_columns = ['등록날짜', '환자 명', '진단 의사명']
@@ -688,14 +713,21 @@ class ExcelBackend:
                 state = patients_sheet.cell(row=row, column=patients_headers.get("주")).value
                 
                 if name:
-                    # 생년 처리 (이전 방식)
+                    # 생년 처리 (이전 방식 + 영문 등 다양한 날짜 포맷 지원)
                     birth_year = ""
                     if birth_date and isinstance(birth_date, str):
                         if "년" in birth_date:
                             birth_year = birth_date.split("년")[0]
                         elif "월" in birth_date and "," in birth_date:
                             birth_year = birth_date.split(",")[1].strip()
-                    
+                        else:
+                            # 영문 등 다양한 날짜 포맷 지원
+                            try:
+                                dt = pd.to_datetime(birth_date, errors='coerce')
+                                if pd.notnull(dt):
+                                    birth_year = str(dt.year)
+                            except Exception:
+                                birth_year = ""
                     patients_data[name] = {
                         "생년": birth_year,
                         "연령대": age_range if age_range else "",
@@ -843,22 +875,23 @@ class ExcelBackend:
         if not birthdate_str or pd.isna(birthdate_str):
             return None
         try:
-            # "11월 25, 1980" 형식 처리
-            if "월" in birthdate_str and "," in birthdate_str:
-                month = int(birthdate_str.split("월")[0])
-                day = int(birthdate_str.split(",")[0].split("월")[1].strip())
-                year = int(birthdate_str.split(",")[1].strip())
-                
+            # 1. 한글 "월"과 ","가 있는 형식 처리
+            if "월" in str(birthdate_str) and "," in str(birthdate_str):
+                month = int(str(birthdate_str).split("월")[0])
+                day = int(str(birthdate_str).split(",")[0].split("월")[1].strip())
+                year = int(str(birthdate_str).split(",")[1].strip())
                 birth_date = datetime(year, month, day)
-                today = datetime.now()
-                
-                # 엑셀의 DATEDIF 함수와 동일한 계산
-                age = today.year - birth_date.year
-                if (today.month, today.day) < (birth_date.month, birth_date.day):
-                    age -= 1
-                
-                return age
-            return None
+            else:
+                # 2. pandas로 다양한 날짜 포맷 자동 파싱 (영문, 숫자 등)
+                dt = pd.to_datetime(birthdate_str, errors='coerce')
+                if pd.isnull(dt):
+                    return None
+                birth_date = dt.to_pydatetime()
+            today = datetime.now()
+            age = today.year - birth_date.year
+            if (today.month, today.day) < (birth_date.month, birth_date.day):
+                age -= 1
+            return age
         except Exception as e:
             self.logger.warning(f"나이 계산 실패: {birthdate_str} -> {str(e)}")
             return None
