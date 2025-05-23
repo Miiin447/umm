@@ -10,7 +10,7 @@ import customtkinter as ctk
 import shutil
 import sys
 from datetime import datetime
-import excel_backend
+import 구버전_excel
 import threading
 from copy import copy
 import logging
@@ -72,7 +72,7 @@ def setup_logging():
 # 로거 초기화
 logger = setup_logging()
 
-processor = excel_backend.ExcelBackend()
+processor = 구버전_excel.ExcelBackend()
 
 # ─────────────────────────── 테마 설정 ───────────────────────────
 # Light 모드 고정 및 컬러 테마 설정
