@@ -7,12 +7,13 @@ from openpyxl import load_workbook
 from openpyxl.utils import range_boundaries, get_column_letter
 import re
 from copy import copy
-from openpyxl.styles import Border, Side, PatternFill
+from openpyxl.styles import Border, Side, PatternFill, Font, Alignment
 from tkinter import messagebox
 from collections import Counter
 from openpyxl.worksheet.filters import AutoFilter
 import pytz
 from openpyxl.chart import LineChart, Reference
+from openpyxl.worksheet.table import Table
 
 class ExcelBackend:
     def __init__(self):
@@ -142,7 +143,7 @@ class ExcelBackend:
         self.logger.warning(f"테이블을 찾을 수 없음: {table_name}")
         return None
 
-    def process_patients_file(self, main_file, patients_file):
+    def process_patients_file(self, main_file, patients_file, skip_backup=False):
         try:
             self.logger.info(f"환자 파일 처리 시작: {patients_file}")
             
@@ -359,7 +360,7 @@ class ExcelBackend:
             self.logger.error(f"환자 파일 처리 중 오류 발생: {str(e)}", exc_info=True)
             return {"success": False, "msg": str(e)}
 
-    def process_PaymentItems_items(self, main_file, PaymentItems_file):
+    def process_PaymentItems_items(self, main_file, PaymentItems_file, skip_backup=False):
         try:
             self.logger.info(f"결제 항목 파일 처리 시작: {PaymentItems_file}")
             
@@ -476,24 +477,27 @@ class ExcelBackend:
                 for _, refund_row in refund_rows.iterrows():
                     refund_amount = abs(refund_row['양'])
                     refund_date = refund_row['원본_날짜']
+                    refund_patient = refund_row['환자 명']
+                    refund_doctor = refund_row['진단 의사명']
                     
                     if pd.isnull(refund_date):
-                        self.logger.warning(f"환불 거래의 날짜가 없음: {refund_row['환자 명']} - {refund_amount}원")
+                        self.logger.warning(f"환불 거래의 날짜가 없음: {refund_patient} - {refund_amount}원")
                         df = df.drop(refund_row.name)
                         continue
                     
-                    # 같은 환자, 같은 의사, 같은 금액의 양수 거래 찾기
+                    # 같은 환자, 같은 의사의 양수 거래 찾기 (금액이 정확히 일치하는 경우)
                     matching_rows = df[
-                        (df['환자 명'] == refund_row['환자 명']) &
-                        (df['진단 의사명'] == refund_row['진단 의사명']) &
+                        (df['환자 명'] == refund_patient) &
+                        (df['진단 의사명'] == refund_doctor) &
                         (df['양'] == refund_amount) &
-                        (df['원본_날짜'].notna())
+                        (df['원본_날짜'].notna()) &
+                        (df['원본_날짜'] < refund_date)  # 환불 날짜보다 이전 거래만 매칭
                     ].copy()
                     
                     if not matching_rows.empty:
                         try:
-                            # 날짜 차이 계산
-                            matching_rows['날짜_차이'] = abs(matching_rows['원본_날짜'] - refund_date)
+                            # 날짜 차이 계산 (환불 날짜 - 원래 거래 날짜)
+                            matching_rows['날짜_차이'] = refund_date - matching_rows['원본_날짜']
                             
                             # 날짜 차이가 있는 행만 필터링
                             valid_matches = matching_rows[matching_rows['날짜_차이'].notna()]
@@ -502,18 +506,50 @@ class ExcelBackend:
                                 # 가장 가까운 날짜의 거래 선택
                                 closest_row = valid_matches.loc[valid_matches['날짜_차이'].idxmin()]
                                 
-                                # 매칭되는 행 제외
-                                df = df.drop(closest_row.name)
-                                self.logger.info(f"환불 처리: {refund_row['환자 명']} - {refund_amount}원 (날짜 차이: {closest_row['날짜_차이'].days}일)")
+                                # 매칭되는 행과 환불 행 모두 제외
+                                df = df.drop([closest_row.name, refund_row.name])
+                                self.logger.info(f"환불 처리 완료: {refund_patient} - {refund_amount}원 (날짜 차이: {closest_row['날짜_차이'].days}일)")
                             else:
-                                self.logger.warning(f"유효한 날짜 차이가 있는 매칭 거래를 찾을 수 없음: {refund_row['환자 명']} - {refund_amount}원")
+                                self.logger.warning(f"유효한 날짜 차이가 있는 매칭 거래를 찾을 수 없음: {refund_patient} - {refund_amount}원")
                                 df = df.drop(refund_row.name)
                         except Exception as e:
                             self.logger.warning(f"환불 매칭 처리 중 오류 발생: {str(e)}")
                             df = df.drop(refund_row.name)
                     else:
-                        self.logger.warning(f"환불에 매칭되는 거래를 찾을 수 없음: {refund_row['환자 명']} - {refund_amount}원")
-                        df = df.drop(refund_row.name)
+                        # 정확히 일치하는 거래가 없는 경우, 금액이 비슷한 거래 찾기
+                        similar_rows = df[
+                            (df['환자 명'] == refund_patient) &
+                            (df['진단 의사명'] == refund_doctor) &
+                            (df['양'] > 0) &  # 양수 거래만
+                            (df['원본_날짜'].notna()) &
+                            (df['원본_날짜'] < refund_date)  # 환불 날짜보다 이전 거래만
+                        ].copy()
+                        
+                        if not similar_rows.empty:
+                            try:
+                                # 금액 차이 계산
+                                similar_rows['금액_차이'] = abs(similar_rows['양'] - refund_amount)
+                                
+                                # 금액 차이가 10% 이내인 거래만 필터링
+                                threshold = refund_amount * 0.1
+                                valid_similar = similar_rows[similar_rows['금액_차이'] <= threshold]
+                                
+                                if not valid_similar.empty:
+                                    # 가장 금액이 비슷한 거래 선택
+                                    closest_row = valid_similar.loc[valid_similar['금액_차이'].idxmin()]
+                                    
+                                    # 매칭되는 행과 환불 행 모두 제외
+                                    df = df.drop([closest_row.name, refund_row.name])
+                                    self.logger.info(f"환불 처리 완료 (유사 금액): {refund_patient} - {refund_amount}원 (원래 거래: {closest_row['양']}원)")
+                                else:
+                                    self.logger.warning(f"유사한 금액의 매칭 거래를 찾을 수 없음: {refund_patient} - {refund_amount}원")
+                                    df = df.drop(refund_row.name)
+                            except Exception as e:
+                                self.logger.warning(f"환불 유사 매칭 처리 중 오류 발생: {str(e)}")
+                                df = df.drop(refund_row.name)
+                        else:
+                            self.logger.warning(f"환불에 매칭되는 거래를 찾을 수 없음: {refund_patient} - {refund_amount}원")
+                            df = df.drop(refund_row.name)
             
             # 원본 날짜 컬럼 삭제
             df = df.drop('원본_날짜', axis=1)
@@ -825,6 +861,7 @@ class ExcelBackend:
                 self.logger.error(f"메인 파일이 존재하지 않습니다: {main_file}")
                 return {"success": False, "msg": "메인 파일이 존재하지 않습니다"}
             
+            # 백업 디렉토리 생성 및 백업 파일 생성
             backup_dir = os.path.join(os.path.dirname(main_file), "BACK UP")
             os.makedirs(backup_dir, exist_ok=True)
             backup_file = os.path.join(backup_dir, f"BACKUP_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{os.path.basename(main_file)}")
@@ -836,7 +873,7 @@ class ExcelBackend:
             # 환자 파일 처리
             if patients_file and os.path.exists(patients_file):
                 self.logger.info("환자 파일 처리 시작")
-                result['patients'] = self.process_patients_file(main_file, patients_file)
+                result['patients'] = self.process_patients_file(main_file, patients_file, skip_backup=True)
                 if not result['patients']['success']:
                     self.logger.error("환자 파일 처리 실패")
                     return result
@@ -847,7 +884,7 @@ class ExcelBackend:
             # 결제 파일 처리
             if payment_file and os.path.exists(payment_file):
                 self.logger.info("결제 파일 처리 시작")
-                result['payments'] = self.process_PaymentItems_items(main_file, payment_file)
+                result['payments'] = self.process_PaymentItems_items(main_file, payment_file, skip_backup=True)
                 if not result['payments']['success']:
                     self.logger.error("결제 파일 처리 실패")
                     return result
@@ -871,55 +908,7 @@ class ExcelBackend:
             self.logger.error(f"테이블 업데이트 중 오류 발생: {str(e)}", exc_info=True)
             return {"success": False, "msg": str(e)}
 
-    def calculate_age_from_birthdate(self, birthdate_str):
-        if not birthdate_str or pd.isna(birthdate_str):
-            return None
-        try:
-            # 1. 한글 "월"과 ","가 있는 형식 처리
-            if "월" in str(birthdate_str) and "," in str(birthdate_str):
-                month = int(str(birthdate_str).split("월")[0])
-                day = int(str(birthdate_str).split(",")[0].split("월")[1].strip())
-                year = int(str(birthdate_str).split(",")[1].strip())
-                birth_date = datetime(year, month, day)
-            else:
-                # 2. pandas로 다양한 날짜 포맷 자동 파싱 (영문, 숫자 등)
-                dt = pd.to_datetime(birthdate_str, errors='coerce')
-                if pd.isnull(dt):
-                    return None
-                birth_date = dt.to_pydatetime()
-            today = datetime.now()
-            age = today.year - birth_date.year
-            if (today.month, today.day) < (birth_date.month, birth_date.day):
-                age -= 1
-            return age
-        except Exception as e:
-            self.logger.warning(f"나이 계산 실패: {birthdate_str} -> {str(e)}")
-            return None
-
-    def get_age_range(self, age):
-        if age is None:
-            self.logger.warning("나이가 None이어서 연령대를 계산할 수 없음")
-            return None
-        try:
-            if age < 20:
-                return "10s"
-            elif age < 30:
-                return "20s"
-            elif age < 40:
-                return "30s"
-            elif age < 50:
-                return "40s"
-            elif age < 60:
-                return "50s"
-            elif age < 70:
-                return "60s"
-            else:
-                return "70s+"
-        except Exception as e:
-            self.logger.warning(f"연령대 계산 중 오류 발생: {age} -> {str(e)}")
-            return None
-
-    def run_chart_update(self, main_file, selected_year=None, selected_month=None):
+    def run_chart_update(self, main_file, selected_year=None, selected_month=None, payment_file=None):
         """도표 업데이트 기능 실행"""
         self.logger.info("도표 업데이트 시작")
         self.logger.info(f"메인 파일: {main_file}")
@@ -1350,112 +1339,286 @@ class ExcelBackend:
 
             # --- 여기서부터 월별진료지표 시트의 월별진료 테이블 업데이트 추가 ---
             try:
+                self.logger.info("\n=== 월별진료 테이블 업데이트 시작 ===")
                 # 1. 월별진료지표 시트와 월별진료 테이블 찾기
                 treatment_sheet = None
                 treatment_table = None
                 for sheet in wb.worksheets:
                     if sheet.title == "월별진료지표":
                         treatment_sheet = sheet
+                        self.logger.info(f"월별진료지표 시트 찾음: {sheet.title}")
                         break
+                
                 if treatment_sheet is None:
                     self.logger.error("월별진료지표 시트를 찾을 수 없음")
-                    # 이 기능만 실패해도 전체 실패로 만들지 않고 넘어감
-                else:
-                    treatment_table = self.find_table("월별진료", treatment_sheet)
-                    if treatment_table is None:
-                        self.logger.error("월별진료 테이블을 찾을 수 없음")
-                    else:
-                        # 고객관리자동 테이블에서 월별 진료 수 계산
-                        ac_min_col, ac_min_row, ac_max_col, ac_max_row = range_boundaries(auto_customers_table.ref)
-                        monthly_treatment_counts = {}  # {year.month: count}
-                        
-                        for row in range(ac_min_row+1, ac_max_row+1):
-                            date_val = auto_customers_sheet.cell(row=row, column=auto_customers_headers.index("등록날짜")+ac_min_col).value
-                            if date_val:
-                                try:
-                                    if "년" in str(date_val) and "월" in str(date_val):
-                                        y = int(str(date_val).split("년")[0])
-                                        m = int(str(date_val).split("년")[1].split("월")[0].strip())
-                                        period_key = f"{y}.{m:02d}"
-                                        monthly_treatment_counts[period_key] = monthly_treatment_counts.get(period_key, 0) + 1
-                                except:
-                                    continue
-                        
-                        self.logger.info(f"월별 진료 수 계산 완료: {monthly_treatment_counts}")
-                        
-                        # 테이블 범위 가져오기
-                        t_min_col, t_min_row, t_max_col, t_max_row = range_boundaries(treatment_table.ref)
-                        
-                        # 기존 데이터 삭제 (헤더 제외)
-                        for row in range(t_min_row+1, t_max_row+1):
-                            for col in range(t_min_col, t_max_col+1):
-                                cell = treatment_sheet.cell(row=row, column=col)
-                                cell.value = None
-                                cell.font = None
-                                cell.fill = PatternFill(fill_type=None)
-                                cell.border = None
-                                cell.alignment = None
+                    return {"success": False, "msg": "월별진료지표 시트를 찾을 수 없습니다."}
+                
+                treatment_table = self.find_table("월별진료", treatment_sheet)
+                if treatment_table is None:
+                    self.logger.error("월별진료 테이블을 찾을 수 없음")
+                    return {"success": False, "msg": "월별진료 테이블을 찾을 수 없습니다."}
+                
+                self.logger.info("월별진료 테이블 찾음")
+                
+                # 고객관리자동 테이블에서 월별 진료 수 계산
+                ac_min_col, ac_min_row, ac_max_col, ac_max_row = range_boundaries(auto_customers_table.ref)
+                monthly_treatment_counts = {}  # {year.month: count}
+                
+                self.logger.info("월별 진료 수 계산 시작")
+                try:
+                    for row in range(ac_min_row+1, ac_max_row+1):
+                        date_val = auto_customers_sheet.cell(row=row, column=auto_customers_headers.index("등록날짜")+ac_min_col).value
+                        amount_val = auto_customers_sheet.cell(row=row, column=auto_customers_headers.index("양")+ac_min_col).value
+                        if date_val:
+                            try:
+                                if "년" in str(date_val) and "월" in str(date_val):
+                                    y = int(str(date_val).split("년")[0])
+                                    m = int(str(date_val).split("년")[1].split("월")[0].strip())
+                                    period_key = f"{y}.{m:02d}"
+                                    monthly_treatment_counts[period_key] = monthly_treatment_counts.get(period_key, 0) + 1
+                                    # 양 컬럼에 달러 기호 추가
+                                    if amount_val and isinstance(amount_val, (int, float)):
+                                        auto_customers_sheet.cell(row=row, column=auto_customers_headers.index("양")+ac_min_col).value = f"${amount_val:,.2f}"
+                            except Exception as e:
+                                self.logger.warning(f"날짜 파싱 실패 (행 {row}): {date_val} -> {str(e)}")
+                                continue
+                except Exception as e:
+                    self.logger.error(f"월별 진료 수 계산 중 오류 발생: {str(e)}")
+                    return {"success": False, "msg": f"월별 진료 수 계산 중 오류 발생: {str(e)}"}
+                
+                self.logger.info(f"월별 진료 수 계산 완료: {monthly_treatment_counts}")
+                
+                # 테이블 범위 가져오기
+                t_min_col, t_min_row, t_max_col, t_max_row = range_boundaries(treatment_table.ref)
+                self.logger.info(f"테이블 범위: {treatment_table.ref}")
+                
+                try:
+                    # 기존 데이터 삭제 (헤더 제외)
+                    self.logger.info("기존 데이터 삭제 시작")
+                    for row in range(t_min_row+1, t_max_row+1):
+                        for col in range(t_min_col, t_max_col+1):
+                            cell = treatment_sheet.cell(row=row, column=col)
+                            cell.value = None
+                            cell.font = None
+                            cell.fill = PatternFill(fill_type=None)
+                            cell.border = None
+                            cell.alignment = None
+                    self.logger.info("기존 데이터 삭제 완료")
 
-                        # 데이터 입력
-                        current_row = t_min_row + 1
-                        total_cumulative = 0
+                    # 데이터 입력
+                    current_row = t_min_row + 1
+                    total_cumulative = 0
+                    
+                    # 날짜를 연속된 순서로 정렬
+                    sorted_periods = sorted(monthly_treatment_counts.keys())
+                    self.logger.info(f"정렬된 기간: {sorted_periods}")
+                    
+                    if len(sorted_periods) > 1:
+                        # 첫 번째 날짜와 선택한 날짜 사이의 모든 월을 생성
+                        start_year, start_month = map(int, sorted_periods[0].split('.'))
+                        self.logger.info(f"시작 연월: {start_year}년 {start_month}월")
                         
-                        # 날짜를 연속된 순서로 정렬
-                        sorted_periods = sorted(monthly_treatment_counts.keys())
-                        if len(sorted_periods) > 1:
-                            # 첫 번째 날짜와 선택한 날짜 사이의 모든 월을 생성
-                            start_year, start_month = map(int, sorted_periods[0].split('.'))
+                        # 연속된 날짜 목록 생성 (선택한 연도와 월까지만)
+                        continuous_periods = []
+                        current_year, current_month = start_year, start_month
+                        while (current_year < selected_year) or (current_year == selected_year and current_month <= selected_month):
+                            period_key = f"{current_year}.{current_month:02d}"
+                            continuous_periods.append(period_key)
                             
-                            # 연속된 날짜 목록 생성 (선택한 연도와 월까지만)
-                            continuous_periods = []
-                            current_year, current_month = start_year, start_month
-                            while (current_year < selected_year) or (current_year == selected_year and current_month <= selected_month):
-                                period_key = f"{current_year}.{current_month:02d}"
-                                continuous_periods.append(period_key)
-                                
-                                current_month += 1
-                                if current_month > 12:
-                                    current_month = 1
-                                    current_year += 1
+                            current_month += 1
+                            if current_month > 12:
+                                current_month = 1
+                                current_year += 1
+                        
+                        self.logger.info(f"연속된 기간 목록: {continuous_periods}")
+                        
+                        # 연속된 날짜에 대해 데이터 입력
+                        for period in continuous_periods:
+                            count = monthly_treatment_counts.get(period, 0)  # 해당 월의 데이터가 없으면 0
+                            total_cumulative += count
                             
-                            # 연속된 날짜에 대해 데이터 입력
-                            for period in continuous_periods:
-                                count = monthly_treatment_counts.get(period, 0)  # 해당 월의 데이터가 없으면 0
+                            treatment_sheet.cell(row=current_row, column=t_min_col).value = period
+                            treatment_sheet.cell(row=current_row, column=t_min_col+1).value = count
+                            treatment_sheet.cell(row=current_row, column=t_min_col+2).value = total_cumulative
+                            self.logger.info(f"데이터 입력: {period} - {count}건 (누적: {total_cumulative}건)")
+                            current_row += 1
+                    else:
+                        # 데이터가 하나뿐인 경우
+                        for period in sorted_periods:
+                            year, month = map(int, period.split('.'))
+                            # 선택한 연도와 월 이전의 데이터만 포함
+                            if (year < selected_year) or (year == selected_year and month <= selected_month):
+                                count = monthly_treatment_counts[period]
                                 total_cumulative += count
                                 
                                 treatment_sheet.cell(row=current_row, column=t_min_col).value = period
                                 treatment_sheet.cell(row=current_row, column=t_min_col+1).value = count
                                 treatment_sheet.cell(row=current_row, column=t_min_col+2).value = total_cumulative
+                                self.logger.info(f"데이터 입력: {period} - {count}건 (누적: {total_cumulative}건)")
                                 current_row += 1
-                        else:
-                            # 데이터가 하나뿐인 경우
-                            for period in sorted_periods:
-                                year, month = map(int, period.split('.'))
-                                # 선택한 연도와 월 이전의 데이터만 포함
-                                if (year < selected_year) or (year == selected_year and month <= selected_month):
-                                    count = monthly_treatment_counts[period]
-                                    total_cumulative += count
-                                    
-                                    treatment_sheet.cell(row=current_row, column=t_min_col).value = period
-                                    treatment_sheet.cell(row=current_row, column=t_min_col+1).value = count
-                                    treatment_sheet.cell(row=current_row, column=t_min_col+2).value = total_cumulative
-                                    current_row += 1
-                        
-                        # 테이블 범위 업데이트
-                        last_row = current_row - 1
-                        if last_row < t_min_row + 1:  # 데이터가 없는 경우
-                            last_row = t_min_row + 1  # 최소 1행 유지
-                        treatment_table.ref = f"{get_column_letter(t_min_col)}{t_min_row}:{get_column_letter(t_max_col)}{last_row}"
-                        
-                        # 테이블 속성 보존
-                        treatment_table.autoFilter = AutoFilter(ref=f"{get_column_letter(t_min_col)}{t_min_row}:{get_column_letter(t_max_col)}{last_row}")
-                        treatment_table.displayName = "월별진료"
-                        treatment_table.name = "월별진료"
-                        
-                        wb.save(main_file)
-                        self.logger.info(f"월별진료지표 시트 업데이트 완료: {len(continuous_periods) if len(sorted_periods) > 1 else len(sorted_periods)}개월의 데이터 입력")
+                    
+                    # 테이블 범위 업데이트
+                    last_row = current_row - 1
+                    if last_row < t_min_row + 1:  # 데이터가 없는 경우
+                        last_row = t_min_row + 1  # 최소 1행 유지
+                    treatment_table.ref = f"{get_column_letter(t_min_col)}{t_min_row}:{get_column_letter(t_max_col)}{last_row}"
+                    
+                    # 테이블 속성 보존
+                    treatment_table.autoFilter = AutoFilter(ref=f"{get_column_letter(t_min_col)}{t_min_row}:{get_column_letter(t_max_col)}{last_row}")
+                    treatment_table.displayName = "월별진료"
+                    treatment_table.name = "월별진료"
+                    
+                    wb.save(main_file)
+                    self.logger.info(f"월별진료 테이블 업데이트 완료: {len(continuous_periods) if len(sorted_periods) > 1 else len(sorted_periods)}개월의 데이터 입력")
+                    self.logger.info("=== 월별진료 테이블 업데이트 종료 ===\n")
+                except Exception as e:
+                    self.logger.error(f"월별진료 테이블 데이터 업데이트 중 오류 발생: {str(e)}")
+                    return {"success": False, "msg": f"월별진료 테이블 데이터 업데이트 중 오류 발생: {str(e)}"}
             except Exception as e:
-                self.logger.error(f"월별진료지표 월별진료 테이블 자동 업데이트 중 오류: {str(e)}")
+                self.logger.error(f"월별진료 테이블 업데이트 중 오류 발생: {str(e)}")
+                return {"success": False, "msg": f"월별진료 테이블 업데이트 중 오류 발생: {str(e)}"}
+
+            # --- 여기서부터 월별 의료진별 건수와 급여 현황 자동화 추가 ---
+            try:
+                self.logger.info("\n=== 월별 의료진별 건수와 급여 현황 업데이트 시작 ===")
+                
+                # 1. 새로운 시트 생성 또는 기존 시트 찾기
+                doctor_stats_sheet = None
+                for sheet in wb.worksheets:
+                    if sheet.title == "월별 의료진별 건수":
+                        doctor_stats_sheet = sheet
+                        self.logger.info("기존 월별 의료진별 건수 시트 찾음")
+                        break
+                
+                if doctor_stats_sheet is None:
+                    self.logger.info("새로운 월별 의료진별 건수 시트 생성")
+                    doctor_stats_sheet = wb.create_sheet("월별 의료진별 건수")
+                
+                # 2. 테이블 생성 또는 찾기
+                doctor_stats_table = self.find_table("의료진별건수", doctor_stats_sheet)
+                if doctor_stats_table is None:
+                    self.logger.info("새로운 의료진별건수 테이블 생성")
+                    # 테이블 헤더 설정
+                    headers = ["의료진", "진료건수", "급여", "비고"]
+                    for col, header in enumerate(headers, start=1):
+                        cell = doctor_stats_sheet.cell(row=1, column=col)
+                        cell.value = header
+                        cell.font = Font(bold=True)
+                        cell.fill = PatternFill(start_color="CCCCCC", end_color="CCCCCC", fill_type="solid")
+                        cell.alignment = Alignment(horizontal="center")
+                    
+                    # 테이블 생성
+                    doctor_stats_table = Table(displayName="의료진별건수", ref=f"A1:D2")
+                    doctor_stats_sheet.add_table(doctor_stats_table)
+
+                # 3. 고객관리자동 테이블에서 데이터 추출
+                doctor_stats = {}  # {의료진: {"건수": 0, "급여": 0}}
+                
+                self.logger.info(f"선택된 연월: {selected_year}년 {selected_month}월")
+                self.logger.info("의료진별 통계 계산 시작")
+
+                # 고객관리자동 테이블에서 필요한 컬럼 찾기
+                ac_min_col, ac_min_row, ac_max_col, ac_max_row = range_boundaries(auto_customers_table.ref)
+                headers = [auto_customers_sheet.cell(row=ac_min_row, column=col).value for col in range(ac_min_col, ac_max_col+1)]
+                
+                # 필요한 컬럼 인덱스 찾기
+                date_col_idx = headers.index("등록날짜") if "등록날짜" in headers else None
+                doctor_col_idx = headers.index("진단 의사명") if "진단 의사명" in headers else None
+                amount_col_idx = headers.index("양") if "양" in headers else None
+
+                if None in [date_col_idx, doctor_col_idx, amount_col_idx]:
+                    missing_cols = []
+                    if date_col_idx is None: missing_cols.append("등록날짜")
+                    if doctor_col_idx is None: missing_cols.append("진단 의사명")
+                    if amount_col_idx is None: missing_cols.append("양")
+                    self.logger.error(f"필수 컬럼을 찾을 수 없음: {', '.join(missing_cols)}")
+                    return {"success": False, "msg": f"필수 컬럼을 찾을 수 없음: {', '.join(missing_cols)}"}
+
+                # 의료진별 통계 계산
+                for row in range(ac_min_row+1, ac_max_row+1):
+                    date_val = auto_customers_sheet.cell(row=row, column=ac_min_col+date_col_idx).value
+                    doctor = auto_customers_sheet.cell(row=row, column=ac_min_col+doctor_col_idx).value
+                    amount = auto_customers_sheet.cell(row=row, column=ac_min_col+amount_col_idx).value
+
+                    if date_val and doctor:
+                        try:
+                            if "년" in str(date_val) and "월" in str(date_val):
+                                y = int(str(date_val).split("년")[0])
+                                m = int(str(date_val).split("년")[1].split("월")[0].strip())
+                                if y == selected_year and m == selected_month:
+                                    if doctor not in doctor_stats:
+                                        doctor_stats[doctor] = {"건수": 0, "급여": 0}
+                                    
+                                    # 건수는 모든 거래를 카운트
+                                    doctor_stats[doctor]["건수"] += 1
+                                    
+                                    # 급여는 양수 거래만 계산
+                                    if amount:
+                                        try:
+                                            # 문자열에서 숫자만 추출
+                                            if isinstance(amount, str):
+                                                amount = float(amount.replace('$', '').replace(',', ''))
+                                            if amount > 0:  # 양수 거래만 급여에 포함
+                                                doctor_stats[doctor]["급여"] += amount
+                                        except (ValueError, TypeError) as e:
+                                            self.logger.warning(f"금액 변환 실패 (행 {row}): {amount} -> {str(e)}")
+                                            continue
+                        except Exception as e:
+                            self.logger.warning(f"데이터 처리 실패 (행 {row}): {str(e)}")
+                            continue
+
+                self.logger.info(f"의료진별 통계 계산 완료: {doctor_stats}")
+                
+                # 4. 테이블 데이터 업데이트
+                t_min_col, t_min_row, t_max_col, t_max_row = range_boundaries(doctor_stats_table.ref)
+                
+                # 기존 데이터 삭제 (헤더 제외)
+                self.logger.info("기존 데이터 삭제 시작")
+                for row in range(t_min_row+1, t_max_row+1):
+                    for col in range(t_min_col, t_max_col+1):
+                        cell = doctor_stats_sheet.cell(row=row, column=col)
+                        cell.value = None
+                        cell.font = None
+                        cell.fill = PatternFill(fill_type=None)
+                        cell.border = None
+                        cell.alignment = None
+                
+                # 새 데이터 입력
+                current_row = t_min_row + 1
+                for doctor, stats in doctor_stats.items():
+                    doctor_stats_sheet.cell(row=current_row, column=t_min_col).value = doctor
+                    doctor_stats_sheet.cell(row=current_row, column=t_min_col+1).value = stats["건수"]
+                    # 급여에 달러 기호 추가
+                    doctor_stats_sheet.cell(row=current_row, column=t_min_col+2).value = f"${stats['급여']:,.2f}"
+                    current_row += 1
+                
+                # 테이블 범위 업데이트
+                last_row = current_row - 1
+                if last_row < t_min_row + 1:  # 데이터가 없는 경우
+                    last_row = t_min_row + 1  # 최소 1행 유지
+                doctor_stats_table.ref = f"{get_column_letter(t_min_col)}{t_min_row}:{get_column_letter(t_max_col)}{last_row}"
+                
+                # 테이블 속성 보존
+                doctor_stats_table.autoFilter = AutoFilter(ref=f"{get_column_letter(t_min_col)}{t_min_row}:{get_column_letter(t_max_col)}{last_row}")
+                doctor_stats_table.displayName = "의료진별건수"
+                doctor_stats_table.name = "의료진별건수"
+                
+                # 열 너비 자동 조정
+                for col in range(t_min_col, t_max_col+1):
+                    max_length = 0
+                    for row in range(t_min_row, last_row+1):
+                        cell_value = doctor_stats_sheet.cell(row=row, column=col).value
+                        if cell_value:
+                            max_length = max(max_length, len(str(cell_value)))
+                    adjusted_width = max_length + 2
+                    doctor_stats_sheet.column_dimensions[get_column_letter(col)].width = adjusted_width
+                
+                wb.save(main_file)
+                self.logger.info(f"월별 의료진별 건수와 급여 현황 업데이트 완료: {len(doctor_stats)}명의 의료진 데이터 입력")
+                self.logger.info("=== 월별 의료진별 건수와 급여 현황 업데이트 종료 ===\n")
+            except Exception as e:
+                self.logger.error(f"월별 의료진별 건수와 급여 현황 업데이트 중 오류 발생: {str(e)}", exc_info=True)
+                return {"success": False, "msg": f"월별 의료진별 건수와 급여 현황 업데이트 중 오류 발생: {str(e)}"}
 
             return {
                 "success": True,
@@ -1469,6 +1632,54 @@ class ExcelBackend:
         except Exception as e:
             self.logger.error(f"도표 업데이트 중 오류 발생: {str(e)}")
             return {"success": False, "msg": f"도표 업데이트 중 오류가 발생했습니다: {str(e)}"}
+
+    def calculate_age_from_birthdate(self, birthdate_str):
+        if not birthdate_str or pd.isna(birthdate_str):
+            return None
+        try:
+            # 1. 한글 "월"과 ","가 있는 형식 처리
+            if "월" in str(birthdate_str) and "," in str(birthdate_str):
+                month = int(str(birthdate_str).split("월")[0])
+                day = int(str(birthdate_str).split(",")[0].split("월")[1].strip())
+                year = int(str(birthdate_str).split(",")[1].strip())
+                birth_date = datetime(year, month, day)
+            else:
+                # 2. pandas로 다양한 날짜 포맷 자동 파싱 (영문, 숫자 등)
+                dt = pd.to_datetime(birthdate_str, errors='coerce')
+                if pd.isnull(dt):
+                    return None
+                birth_date = dt.to_pydatetime()
+            today = datetime.now()
+            age = today.year - birth_date.year
+            if (today.month, today.day) < (birth_date.month, birth_date.day):
+                age -= 1
+            return age
+        except Exception as e:
+            self.logger.warning(f"나이 계산 실패: {birthdate_str} -> {str(e)}")
+            return None
+
+    def get_age_range(self, age):
+        if age is None:
+            self.logger.warning("나이가 None이어서 연령대를 계산할 수 없음")
+            return None
+        try:
+            if age < 20:
+                return "10s"
+            elif age < 30:
+                return "20s"
+            elif age < 40:
+                return "30s"
+            elif age < 50:
+                return "40s"
+            elif age < 60:
+                return "50s"
+            elif age < 70:
+                return "60s"
+            else:
+                return "70s+"
+        except Exception as e:
+            self.logger.warning(f"연령대 계산 중 오류 발생: {age} -> {str(e)}")
+            return None
 
 if __name__ == "__main__":
     backend = ExcelBackend()
