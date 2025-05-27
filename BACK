@@ -1841,7 +1841,6 @@ class ExcelBackend:
                     if sheet_name in [sheet.Name for sheet in backup_wb.Sheets] and sheet_name in [sheet.Name for sheet in main_wb.Sheets]:
                         backup_sheet = backup_wb.Sheets(sheet_name)
                         main_sheet = main_wb.Sheets(sheet_name)
-                        # 기존 그래프 삭제
                         chart_count_before = main_sheet.ChartObjects().Count
                         self.logger.info(f"{sheet_name} 시트에서 {chart_count_before}개의 기존 그래프 삭제 시작")
                         for i in range(chart_count_before, 0, -1):
@@ -1849,13 +1848,17 @@ class ExcelBackend:
                                 main_sheet.ChartObjects(i).Delete()
                             except:
                                 continue
-                        # 백업된 그래프 복원
                         backup_chart_count = backup_sheet.ChartObjects().Count
-                        self.logger.info(f"{sheet_name} 시트에서 {backup_chart_count}개의 그래프 복원 시작")
+                        position_count = len(self.chart_positions.get(sheet_name, []))
+                        restore_count = min(backup_chart_count, position_count)
+                        self.logger.info(f"{sheet_name} 시트에서 {restore_count}개의 그래프 복원 시도 (백업:{backup_chart_count}, 위치정보:{position_count})")
                         restored_count = 0
-                        if sheet_name in self.chart_positions:
-                            for i, chart_info in enumerate(self.chart_positions[sheet_name], 1):
+                        for i in range(1, restore_count + 1):
+                            chart_info = self.chart_positions[sheet_name][i-1]
+                            retry = 0
+                            while retry < 3:
                                 try:
+                                    main_sheet.Activate()
                                     chart = backup_sheet.ChartObjects(i)
                                     chart.Copy()
                                     main_sheet.Paste()
@@ -1868,10 +1871,12 @@ class ExcelBackend:
                                     self.logger.info(f"{sheet_name} 시트의 그래프 복원 완료: {chart_info['name']}")
                                     self.logger.info(f"그래프 위치 및 크기: Left={chart_info['left']}, Top={chart_info['top']}, Width={chart_info['width']}, Height={chart_info['height']}")
                                     restored_count += 1
+                                    break
                                 except Exception as e:
-                                    self.logger.warning(f"그래프 복원 중 오류 발생: {str(e)}")
-                                    continue
-                        # 복원 후 차트 개수 체크
+                                    retry += 1
+                                    self.logger.warning(f"그래프 복원 중 오류 발생 (시도 {retry}): {str(e)} | 차트 인덱스: {i}, 이름: {chart_info.get('name')}, 위치: {chart_info}")
+                                    if retry >= 3:
+                                        self.logger.error(f"그래프 복원 완전 실패: {chart_info.get('name')} (인덱스 {i})")
                         chart_count_after = main_sheet.ChartObjects().Count
                         if restored_count != backup_chart_count or chart_count_after != backup_chart_count:
                             self.logger.warning(f"[경고] {sheet_name} 시트: 복원된 그래프 개수({restored_count})/실제 개수({chart_count_after})/백업 개수({backup_chart_count}) 불일치!")
@@ -1880,6 +1885,47 @@ class ExcelBackend:
                 except Exception as e:
                     self.logger.error(f"{sheet_name} 시트 처리 중 오류 발생: {str(e)}")
                     continue
+            # === 추가: 각 시트의 첫 번째 차트 데이터 소스를 테이블 범위로 확장 ===
+            try:
+                chart_table_map = [
+                    ("30일간회원가입수", "월별가입"),
+                    ("월별회원가입지표", "월별회원"),
+                    ("월별진료지표", "월별진료"),
+                ]
+                for sheet_name, table_name in chart_table_map:
+                    try:
+                        if sheet_name in [sheet.Name for sheet in main_wb.Sheets]:
+                            ws = main_wb.Sheets(sheet_name)
+                            # 테이블(리스트오브젝트) 찾기
+                            table = None
+                            for obj in ws.ListObjects:
+                                if obj.Name == table_name:
+                                    table = obj
+                                    break
+                            if not table:
+                                self.logger.warning(f"{sheet_name} 시트에서 테이블 {table_name}을 찾을 수 없음")
+                                continue
+                            # 첫 번째 차트 찾기
+                            if ws.ChartObjects().Count < 1:
+                                self.logger.warning(f"{sheet_name} 시트에 차트가 없음")
+                                continue
+                            chart_obj = ws.ChartObjects(1)
+                            # 누적열 제외: 월별회원가입지표, 월별진료지표는 A~B열만 범위로 지정
+                            if sheet_name in ["월별회원가입지표", "월별진료지표"]:
+                                first_row = table.Range.Row
+                                last_row = table.Range.Rows.Count + first_row - 1
+                                first_col = table.Range.Column
+                                col_b = first_col + 1
+                                data_range = ws.Range(ws.Cells(first_row, first_col), ws.Cells(last_row, col_b)).Address
+                            else:
+                                data_range = table.Range.Address
+                            chart_obj.Chart.SetSourceData(Source=ws.Range(data_range))
+                            self.logger.info(f"{sheet_name} 시트의 차트 데이터 소스를 {table_name} 테이블 범위({data_range})로 확장 완료")
+                    except Exception as e:
+                        self.logger.warning(f"{sheet_name} 시트 차트 데이터 소스 확장 중 오류: {str(e)}")
+            except Exception as e:
+                self.logger.warning(f"차트 데이터 소스 확장 전체 오류: {str(e)}")
+            # === 끝 ===
             main_wb.Save()
             try:
                 backup_wb.Close(SaveChanges=False)
