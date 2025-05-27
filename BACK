@@ -3,7 +3,7 @@ import shutil
 import logging
 from datetime import datetime, timedelta, timezone
 import pandas as pd
-from openpyxl import load_workbook
+from openpyxl import load_workbook, Workbook
 from openpyxl.utils import range_boundaries, get_column_letter
 import re
 from copy import copy
@@ -14,6 +14,8 @@ from openpyxl.worksheet.filters import AutoFilter
 import pytz
 from openpyxl.chart import LineChart, Reference
 from openpyxl.worksheet.table import Table
+import win32com.client
+import pythoncom
 
 class ExcelBackend:
     def __init__(self):
@@ -675,9 +677,17 @@ class ExcelBackend:
             self.logger.error(f"결제 항목 처리 중 오류 발생: {str(e)}", exc_info=True)
             return {"success": False, "msg": str(e)}
 
-    def run_patient_update(self, main_file):
+    def run_patient_update(self, main_file, skip_chart_backup_restore=False):
         try:
             self.logger.info("환자 정보 업데이트 시작")
+            
+            # 차트 백업
+            if not skip_chart_backup_restore:
+                self.logger.info("그래프 백업 시작")
+                if not self.backup_charts(main_file):
+                    self.logger.error("그래프 백업 실패")
+                    return {"success": False, "msg": "그래프 백업 실패"}
+                self.logger.info("그래프 백업 완료")
             
             wb = load_workbook(main_file)
             self.logger.info(f"메인 파일 로드 완료: {main_file}")
@@ -846,10 +856,25 @@ class ExcelBackend:
             wb.save(main_file)
             self.logger.info(f"환자 정보 업데이트 완료: {updated_count}건 업데이트, {len(empty_rows)}건 공란 행 삭제")
             
+            # 차트 복원
+            if not skip_chart_backup_restore:
+                self.logger.info("그래프 복원 시작")
+                if not self.restore_charts(main_file):
+                    self.logger.error("그래프 복원 실패")
+                    return {"success": False, "msg": "그래프 복원 실패"}
+                self.logger.info("그래프 복원 완료")
+            
             return {"success": True, "msg": f"{updated_count}건의 환자 정보 업데이트 완료, {len(empty_rows)}건의 공란 행 삭제"}
             
         except Exception as e:
             self.logger.error(f"환자 정보 업데이트 중 오류 발생: {str(e)}", exc_info=True)
+            # 오류 발생 시에도 차트 복원 시도
+            if not skip_chart_backup_restore:
+                try:
+                    self.logger.info("오류 발생으로 인한 그래프 복원 시도")
+                    self.restore_charts(main_file)
+                except:
+                    pass
             return {"success": False, "msg": str(e)}
 
     def run_table_update(self, main_file, patients_file=None, payment_file=None, update_patient_info=True):
@@ -860,6 +885,13 @@ class ExcelBackend:
             if not os.path.exists(main_file):
                 self.logger.error(f"메인 파일이 존재하지 않습니다: {main_file}")
                 return {"success": False, "msg": "메인 파일이 존재하지 않습니다"}
+            
+            # 차트 백업
+            self.logger.info("그래프 백업 시작")
+            if not self.backup_charts(main_file):
+                self.logger.error("그래프 백업 실패")
+                return {"success": False, "msg": "그래프 백업 실패"}
+            self.logger.info("그래프 백업 완료")
             
             # 백업 디렉토리 생성 및 백업 파일 생성
             backup_dir = os.path.join(os.path.dirname(main_file), "BACK UP")
@@ -894,7 +926,7 @@ class ExcelBackend:
             
             # 환자 정보 업데이트 여부 확인
             if update_patient_info:
-                result['update'] = self.run_patient_update(main_file)
+                result['update'] = self.run_patient_update(main_file, skip_chart_backup_restore=True)
                 if not result['update']['success']:
                     self.logger.error("환자 정보 업데이트 실패")
                     return result
@@ -902,21 +934,39 @@ class ExcelBackend:
                 self.logger.info("환자 정보 업데이트를 건너뜁니다")
                 result['update'] = {"success": True, "msg": "환자 정보 업데이트 건너뜀"}
             
+            # 차트 복원
+            self.logger.info("그래프 복원 시작")
+            if not self.restore_charts(main_file):
+                self.logger.error("그래프 복원 실패")
+                return {"success": False, "msg": "그래프 복원 실패"}
+            self.logger.info("그래프 복원 완료")
+            
             self.logger.info("테이블 업데이트 작업 완료")
             return {"success": True, "msg": "표 업데이트 전체 완료", "detail": result}
         except Exception as e:
             self.logger.error(f"테이블 업데이트 중 오류 발생: {str(e)}", exc_info=True)
+            # 오류 발생 시에도 차트 복원 시도
+            try:
+                self.logger.info("오류 발생으로 인한 그래프 복원 시도")
+                self.restore_charts(main_file)
+            except:
+                pass
             return {"success": False, "msg": str(e)}
 
     def run_chart_update(self, main_file, selected_year=None, selected_month=None, payment_file=None):
-        """도표 업데이트 기능 실행"""
-        self.logger.info("도표 업데이트 시작")
-        self.logger.info(f"메인 파일: {main_file}")
         try:
+            self.logger.info("도표 업데이트 시작")
+            self.logger.info(f"메인 파일: {main_file}")
+            
             # 메인 파일 존재 확인
             if not os.path.exists(main_file):
                 self.logger.error(f"메인 파일이 존재하지 않음: {main_file}")
                 return {"success": False, "msg": "메인 파일을 찾을 수 없습니다."}
+            
+            # 차트 백업
+            if not self.backup_charts(main_file):
+                self.logger.error("차트 백업 실패")
+                return {"success": False, "msg": "차트 백업 실패"}
             
             # 메인 파일 로드
             self.logger.info("메인 파일 로드 시작")
@@ -1620,6 +1670,13 @@ class ExcelBackend:
                 self.logger.error(f"월별 의료진별 건수와 급여 현황 업데이트 중 오류 발생: {str(e)}", exc_info=True)
                 return {"success": False, "msg": f"월별 의료진별 건수와 급여 현황 업데이트 중 오류 발생: {str(e)}"}
 
+            # 그래프 복원
+            self.logger.info("그래프 복원 시작")
+            if not self.restore_charts(main_file):
+                self.logger.error("그래프 복원 실패")
+                return {"success": False, "msg": "그래프 복원 실패"}
+            self.logger.info("그래프 복원 완료")
+
             return {
                 "success": True,
                 "msg": "도표 업데이트가 완료되었습니다.",
@@ -1631,6 +1688,11 @@ class ExcelBackend:
             }
         except Exception as e:
             self.logger.error(f"도표 업데이트 중 오류 발생: {str(e)}")
+            # 오류 발생 시에도 차트 복원 시도
+            try:
+                self.restore_charts(main_file)
+            except:
+                pass
             return {"success": False, "msg": f"도표 업데이트 중 오류가 발생했습니다: {str(e)}"}
 
     def calculate_age_from_birthdate(self, birthdate_str):
@@ -1680,6 +1742,170 @@ class ExcelBackend:
         except Exception as e:
             self.logger.warning(f"연령대 계산 중 오류 발생: {age} -> {str(e)}")
             return None
+
+    def backup_charts(self, main_file):
+        """지정된 시트의 차트를 백업하는 메서드 (차트 이름, 위치, 크기 모두 저장)"""
+        excel = None
+        main_wb = None
+        backup_wb = None
+        self.chart_positions = {}  # 그래프 정보(이름, 위치, 크기) 저장
+        
+        try:
+            self.logger.info("그래프 백업 시작")
+            backup_dir = os.path.join(os.path.dirname(main_file), "BACK UP")
+            os.makedirs(backup_dir, exist_ok=True)
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            self.chart_backup_file = os.path.join(backup_dir, f"CHART_BACKUP_{timestamp}.xlsx")
+            pythoncom.CoInitialize()
+            excel = win32com.client.Dispatch("Excel.Application")
+            excel.Visible = False
+            excel.DisplayAlerts = False
+            excel.EnableEvents = False
+            main_wb = excel.Workbooks.Open(os.path.abspath(main_file), ReadOnly=False)
+            backup_wb = excel.Workbooks.Add()
+            target_sheets = ["지역별회원지표", "지역별진료지표"]
+            for sheet_name in target_sheets:
+                try:
+                    if sheet_name in [sheet.Name for sheet in main_wb.Sheets]:
+                        main_sheet = main_wb.Sheets(sheet_name)
+                        backup_sheet = backup_wb.Sheets.Add()
+                        backup_sheet.Name = sheet_name
+                        chart_count = main_sheet.ChartObjects().Count
+                        self.logger.info(f"{sheet_name} 시트에서 {chart_count}개의 그래프 발견")
+                        self.chart_positions[sheet_name] = []
+                        for i in range(1, chart_count + 1):
+                            try:
+                                chart = main_sheet.ChartObjects(i)
+                                chart_info = {
+                                    'name': chart.Name,
+                                    'left': chart.Left,
+                                    'top': chart.Top,
+                                    'width': chart.Width,
+                                    'height': chart.Height
+                                }
+                                self.chart_positions[sheet_name].append(chart_info)
+                                chart.Copy()
+                                backup_sheet.Paste()
+                                pasted_chart = backup_sheet.ChartObjects(backup_sheet.ChartObjects().Count)
+                                pasted_chart.Name = chart.Name
+                                self.logger.info(f"{sheet_name} 시트의 그래프 백업 완료: {chart.Name}")
+                                self.logger.info(f"그래프 위치 및 크기: Left={chart_info['left']}, Top={chart_info['top']}, Width={chart_info['width']}, Height={chart_info['height']}")
+                            except Exception as e:
+                                self.logger.warning(f"그래프 백업 중 오류 발생: {str(e)}")
+                                continue
+                except Exception as e:
+                    self.logger.error(f"{sheet_name} 시트 처리 중 오류 발생: {str(e)}")
+                    continue
+            for sheet in backup_wb.Sheets:
+                if sheet.Name == "Sheet1":
+                    sheet.Delete()
+            backup_wb.SaveAs(os.path.abspath(self.chart_backup_file))
+            self.logger.info(f"그래프 백업 파일 생성 완료: {self.chart_backup_file}")
+            return True
+        except Exception as e:
+            self.logger.error(f"그래프 백업 중 오류 발생: {str(e)}")
+            return False
+        finally:
+            try:
+                if main_wb:
+                    main_wb.Close(SaveChanges=False)
+                if backup_wb:
+                    backup_wb.Close(SaveChanges=True)
+                if excel:
+                    excel.Quit()
+            except:
+                pass
+            finally:
+                pythoncom.CoUninitialize()
+
+    def restore_charts(self, main_file):
+        """백업된 그래프를 복원하는 메서드 (차트 이름, 위치, 크기 모두 복원, 개수 체크)"""
+        excel = None
+        main_wb = None
+        backup_wb = None
+        try:
+            if not hasattr(self, 'chart_backup_file') or not os.path.exists(self.chart_backup_file):
+                self.logger.error("그래프 백업 파일이 존재하지 않음")
+                return False
+            self.logger.info("그래프 복원 시작")
+            pythoncom.CoInitialize()
+            excel = win32com.client.Dispatch("Excel.Application")
+            excel.Visible = False
+            excel.DisplayAlerts = False
+            excel.EnableEvents = False
+            main_wb = excel.Workbooks.Open(os.path.abspath(main_file), ReadOnly=False)
+            backup_wb = excel.Workbooks.Open(os.path.abspath(self.chart_backup_file), ReadOnly=True)
+            target_sheets = ["지역별회원지표", "지역별진료지표"]
+            for sheet_name in target_sheets:
+                try:
+                    if sheet_name in [sheet.Name for sheet in backup_wb.Sheets] and sheet_name in [sheet.Name for sheet in main_wb.Sheets]:
+                        backup_sheet = backup_wb.Sheets(sheet_name)
+                        main_sheet = main_wb.Sheets(sheet_name)
+                        # 기존 그래프 삭제
+                        chart_count_before = main_sheet.ChartObjects().Count
+                        self.logger.info(f"{sheet_name} 시트에서 {chart_count_before}개의 기존 그래프 삭제 시작")
+                        for i in range(chart_count_before, 0, -1):
+                            try:
+                                main_sheet.ChartObjects(i).Delete()
+                            except:
+                                continue
+                        # 백업된 그래프 복원
+                        backup_chart_count = backup_sheet.ChartObjects().Count
+                        self.logger.info(f"{sheet_name} 시트에서 {backup_chart_count}개의 그래프 복원 시작")
+                        restored_count = 0
+                        if sheet_name in self.chart_positions:
+                            for i, chart_info in enumerate(self.chart_positions[sheet_name], 1):
+                                try:
+                                    chart = backup_sheet.ChartObjects(i)
+                                    chart.Copy()
+                                    main_sheet.Paste()
+                                    pasted_chart = main_sheet.ChartObjects(main_sheet.ChartObjects().Count)
+                                    pasted_chart.Name = chart_info['name']
+                                    pasted_chart.Left = chart_info['left']
+                                    pasted_chart.Top = chart_info['top']
+                                    pasted_chart.Width = chart_info['width']
+                                    pasted_chart.Height = chart_info['height']
+                                    self.logger.info(f"{sheet_name} 시트의 그래프 복원 완료: {chart_info['name']}")
+                                    self.logger.info(f"그래프 위치 및 크기: Left={chart_info['left']}, Top={chart_info['top']}, Width={chart_info['width']}, Height={chart_info['height']}")
+                                    restored_count += 1
+                                except Exception as e:
+                                    self.logger.warning(f"그래프 복원 중 오류 발생: {str(e)}")
+                                    continue
+                        # 복원 후 차트 개수 체크
+                        chart_count_after = main_sheet.ChartObjects().Count
+                        if restored_count != backup_chart_count or chart_count_after != backup_chart_count:
+                            self.logger.warning(f"[경고] {sheet_name} 시트: 복원된 그래프 개수({restored_count})/실제 개수({chart_count_after})/백업 개수({backup_chart_count}) 불일치!")
+                        else:
+                            self.logger.info(f"{sheet_name} 시트: 그래프 개수 일치({restored_count})")
+                except Exception as e:
+                    self.logger.error(f"{sheet_name} 시트 처리 중 오류 발생: {str(e)}")
+                    continue
+            main_wb.Save()
+            try:
+                backup_wb.Close(SaveChanges=False)
+                os.remove(self.chart_backup_file)
+                self.logger.info(f"그래프 백업 파일 삭제 완료: {self.chart_backup_file}")
+            except Exception as e:
+                self.logger.warning(f"그래프 백업 파일 삭제 실패: {str(e)}")
+            self.chart_backup_file = None
+            self.chart_positions = {}
+            self.logger.info("그래프 복원 완료")
+            return True
+        except Exception as e:
+            self.logger.error(f"그래프 복원 중 오류 발생: {str(e)}")
+            return False
+        finally:
+            try:
+                if main_wb:
+                    main_wb.Close(SaveChanges=True)
+                if backup_wb:
+                    backup_wb.Close(SaveChanges=False)
+                if excel:
+                    excel.Quit()
+            except:
+                pass
+            finally:
+                pythoncom.CoUninitialize()
 
 if __name__ == "__main__":
     backend = ExcelBackend()
