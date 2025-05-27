@@ -10,11 +10,12 @@ import customtkinter as ctk
 import shutil
 import sys
 from datetime import datetime
-import 구버전_excel
+import excel_backend
 import threading
 from copy import copy
 import logging
 from logging.handlers import RotatingFileHandler
+import random  # 상단에 random 모듈 추가
 
 # 로깅 상태
 LOGGING_ENABLED = False
@@ -23,12 +24,6 @@ LOGGING_ENABLED = False
 def setup_logging():
     global LOGGING_ENABLED
     log_dir = "logs"
-    if not os.path.exists(log_dir):
-        os.makedirs(log_dir)
-        
-    # 현재 날짜와 시간으로 로그 파일명 생성
-    current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_file = os.path.join(log_dir, f"app_{current_time}.log")
     
     # 로거 설정
     logger = logging.getLogger("KedakLogger")
@@ -39,6 +34,14 @@ def setup_logging():
         logger.removeHandler(handler)
     
     if LOGGING_ENABLED:
+        # 로그 디렉토리 생성
+        if not os.path.exists(log_dir):
+            os.makedirs(log_dir)
+            
+        # 현재 날짜와 시간으로 로그 파일명 생성
+        current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
+        log_file = os.path.join(log_dir, f"app_{current_time}.log")
+        
         # 파일 핸들러 설정 (최대 5MB, 최대 5개 파일 유지)
         file_handler = RotatingFileHandler(
             log_file, 
@@ -61,18 +64,23 @@ def setup_logging():
         backend_logger = logging.getLogger("ExcelBackend")
         backend_logger.setLevel(logging.INFO)
         backend_logger.addHandler(file_handler)
+        backend_logger.propagate = False
     else:
         # 로깅이 비활성화된 경우 NullHandler 추가
         logger.addHandler(logging.NullHandler())
+        logger.propagate = False
+        
+        # 백엔드 로거도 NullHandler 사용
         backend_logger = logging.getLogger("ExcelBackend")
         backend_logger.addHandler(logging.NullHandler())
+        backend_logger.propagate = False
     
     return logger
 
 # 로거 초기화
 logger = setup_logging()
 
-processor = 구버전_excel.ExcelBackend()
+processor = excel_backend.ExcelBackend()
 
 # ─────────────────────────── 테마 설정 ───────────────────────────
 # Light 모드 고정 및 컬러 테마 설정
@@ -82,6 +90,8 @@ ctk.set_default_color_theme("blue")
 # ─────────────────────────── 전역 상태 정의 ───────────────────────────
 # STATE: READY(준비) / WORKING(작업중) 중앙 배경 이미지 전환
 STATE = "READY"
+EASTER_EGG_CHANCE = 0.05  # 5% 확률로 이스터에그 표시
+EASTER_EGG_IMAGES = []  # 이스터에그 이미지 목록
 
 # 파일 경로 저장
 UPLOADED_FILES = {
@@ -143,10 +153,12 @@ def on_help():
         1. 메인 파일 업로드
            - '업로드' 버튼을 클릭하여 메인 파일을 선택합니다.
            - 파일이 다른 프로그램에서 열려있지 않은지 확인합니다.
+           - 메인 파일은 자동으로 백업됩니다.
         
         2. 환자/결제 파일 업로드
            - 필요한 파일을 '업로드' 버튼으로 선택합니다.
            - 파일명이 올바른 형식인지 확인합니다.
+           - 파일 선택 후 '취소' 버튼으로 변경 가능합니다.
         
         3. 원하는 기능 실행
            - 표 업데이트: 환자/결제 정보를 메인 파일에 업데이트
@@ -159,6 +171,7 @@ def on_help():
         2. 파일 업로드 전에 파일명이 올바른 형식인지 확인하세요.
         3. 작업 중에는 프로그램을 종료하지 마세요.
         4. 중요한 파일은 자동으로 백업됩니다.
+        5. 작업 완료 후 엑셀 파일을 자동으로 열어볼 수 있습니다.
         """),
         
         ("💡 팁", """
@@ -172,6 +185,7 @@ def on_help():
         1. 모든 파일이 올바른 형식인지
         2. 메인 파일이 다른 프로그램에서 열려있지 않은지
         3. 로그 파일에서 오류 메시지 확인
+        4. 파일명이 정확한지 (대소문자 구분)
         """)
     ]
     
@@ -243,7 +257,9 @@ def on_upload_main_file():
             # 백업 생성
             try:
                 backup_dir = os.path.join(os.path.dirname(file_path), "BACK UP")
-                os.makedirs(backup_dir, exist_ok=True)
+                if not os.path.exists(backup_dir):
+                    os.makedirs(backup_dir)
+                    logger.info(f"백업 폴더 생성 완료: {backup_dir}")
                 backup_file = os.path.join(backup_dir, f"BACKUP_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{main_file_name}")
                 shutil.copy2(file_path, backup_file)
                 logger.info(f"메인 파일 백업 생성 완료: {backup_file}")
@@ -581,15 +597,40 @@ def on_log_view():
 
 # ─────────────────── 중앙 이미지 업데이트 함수 ───────────────────
 
+def load_easter_egg_images():
+    """assets 폴더에서 이스터에그 이미지를 로드합니다."""
+    global EASTER_EGG_IMAGES
+    assets_dir = r"C:\Users\user\OneDrive - 주식회사 케이닥\문서\현민아 폴더\코딩 춘추전국시대\assets"
+    if os.path.exists(assets_dir):
+        # PNG 파일만 필터링
+        EASTER_EGG_IMAGES = [f for f in os.listdir(assets_dir) if f.lower().endswith('.png')]
+        logger.info(f"이스터에그 이미지 {len(EASTER_EGG_IMAGES)}개 로드됨")
+
 def update_center_image(new_state):
     """
     new_state 에 따라 중앙에 표시되는 이미지를 변경합니다.
     1) READY: 처리자 배경제거.png (메인 파일 있을 때)
     2) READY_NO_MAIN: 감시자 배경제거.png (메인 파일 없을 때)
     3) WORKING: 처리중 배경제거.png
+    4) EASTER_EGG: assets 폴더의 랜덤 이미지
     """
     global STATE, center_lbl, center_img
     STATE = new_state
+    
+    # 이스터에그 체크 (READY 상태일 때만)
+    if STATE == "READY" and random.random() < EASTER_EGG_CHANCE and EASTER_EGG_IMAGES:
+        # 랜덤 이미지 선택
+        random_image = random.choice(EASTER_EGG_IMAGES)
+        img_file = os.path.join(r"C:\Users\user\OneDrive - 주식회사 케이닥\문서\현민아 폴더\코딩 춘추전국시대\assets", random_image)
+        if os.path.exists(img_file):
+            pil_img = Image.open(img_file)
+            center_img = ctk.CTkImage(pil_img, size=(180,180))
+            center_lbl.configure(image=center_img)
+            center_lbl.image = center_img  # 참조 유지
+            logger.info(f"이스터에그 이미지 표시: {random_image}")
+            return
+    
+    # 일반 이미지 표시
     img_map = {
         "READY": "처리자 배경제거.png", 
         "READY_NO_MAIN": "감시자 배경제거.png",
@@ -618,19 +659,8 @@ def check_file_access(file_path):
         logger.error(f"파일이 다른 프로세스에 의해 잠겨 있음: {file_path}")
         return False
 
-def setup_folders():
-    """필요한 폴더를 생성합니다"""
-    folders = ['DONE', 'BACK UP', 'SKIPPED']
-    for folder in folders:
-        if not os.path.exists(folder):
-            os.makedirs(folder)
-            logger.info(f"{folder} 폴더 생성 완료")
-
 def update_file_labels():
     """파일 상태 레이블을 업데이트합니다"""
-    # 필요한 폴더 생성
-    setup_folders()
-    
     # 파일 정보 가져오기
     main_file = os.path.basename(UPLOADED_FILES["main"]) if UPLOADED_FILES["main"] else None
     patients_file = os.path.basename(UPLOADED_FILES["patients"]) if UPLOADED_FILES["patients"] else None
@@ -931,9 +961,6 @@ def update_button_states(main_file, patients_file, payment_items):
 def init_app():
     """앱 초기화: 기본 상태 설정"""
     logger.info("앱 초기화 시작")
-    
-    # 필요한 폴더 생성
-    setup_folders()
     
     # 상태 레이블 초기화
     status_lbl.configure(text="파일 업로드가 필요합니다", text_color="#555555")
